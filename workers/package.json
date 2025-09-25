@@ -1,0 +1,30 @@
+{
+  "name": "autocal-worker",
+  "version": "1.0.0",
+  "description": "AutoCal Cloudflare Worker - AI-powered calendar management",
+  "main": "index.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "deploy:dev": "wrangler deploy --env development",
+    "deploy:prod": "wrangler deploy --env production",
+    "tail": "wrangler tail",
+    "test": "echo \"Phase 1: No tests yet. Testing setup coming in Phase 2+\"",
+    "lint": "echo \"Linting setup coming in future phases\""
+  },
+  "keywords": [
+    "cloudflare",
+    "workers",
+    "ai",
+    "calendar",
+    "autocal"
+  ],
+  "author": "AutoCal Team",
+  "license": "MIT",
+  "devDependencies": {
+    "wrangler": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+} 

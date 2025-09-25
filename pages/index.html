@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AutoCal - AI Calendar Assistant</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>AutoCal</h1>
+            <p class="subtitle">AI-powered calendar management</p>
+            <button class="theme-toggle" id="themeToggle" aria-label="Toggle theme">
+                <span class="theme-icon">🌙</span>
+            </button>
+        </header>
+
+        <main>
+            <!-- Input Section -->
+            <section class="input-section">
+                <div class="input-container">
+                    <input 
+                        type="text" 
+                        id="commandInput" 
+                        placeholder="Try: 'Book lunch with Sam next Thursday at 1pm'"
+                        class="command-input"
+                        autocomplete="off"
+                    >
+                    <button id="submitBtn" class="submit-btn">Add Event</button>
+                </div>
+                <div class="loading" id="loading" style="display: none;">
+                    <div class="spinner"></div>
+                    <span>Processing...</span>
+                </div>
+            </section>
+
+            <!-- Assistant Response Section -->
+            <section class="assistant-section">
+                <h2>Assistant</h2>
+                <div id="assistantResponse" class="assistant-response">
+                    Welcome to AutoCal! Type a natural language command to create calendar events.
+                </div>
+            </section>
+
+            <!-- Events Display Section -->
+            <section class="events-section">
+                <h2>Your Events</h2>
+                <div id="eventsList" class="events-list">
+                    <div class="no-events">No events yet. Create your first event above!</div>
+                </div>
+            </section>
+        </main>
+
+        <footer>
+            <p>Powered by Cloudflare Workers AI</p>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html> 

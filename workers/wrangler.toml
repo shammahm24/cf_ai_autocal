@@ -1,0 +1,47 @@
+name = "autocal-worker"
+main = "index.js"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+# Worker configuration
+[env.development]
+name = "autocal-worker-dev"
+
+[env.production]
+name = "autocal-worker-prod"
+
+# Add AI binding for future phases
+# Uncomment when ready for Phase 4 (LLM Integration)
+# [[ai]]
+# binding = "AI"
+
+# Add Durable Object binding for Phase 3
+# Uncomment when ready for Phase 3 (Durable Object Storage)
+# [[durable_objects.bindings]]
+# name = "CALENDAR_DO"
+# class_name = "CalendarDO"
+# script_name = "autocal-worker"
+
+# Add KV binding for potential future use
+# [[kv_namespaces]]
+# binding = "AUTOCAL_KV"
+# preview_id = ""
+# id = ""
+
+# Environment variables
+[vars]
+ENVIRONMENT = "development"
+VERSION = "1.0.0"
+PHASE = "1"
+
+# Development configuration
+[dev]
+ip = "127.0.0.1"
+port = 8787
+local_protocol = "http"
+
+# Build configuration
+[build]
+command = ""
+cwd = ""
+watch_dir = "" 
