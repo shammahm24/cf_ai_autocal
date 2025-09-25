@@ -1,0 +1,25 @@
+"""
+Do not code! We are building a short interactive AI app demo utilizing a Cloudflare centered stack. The app will be an interactive calender called AutoCal. 
+The first step will be to create a design doc used throughout the project design. the design doc will be in a plan directory.
+
+Functions:
+- Takes text input and creates calendar events
+- Auto detects event clashes and recommends adjustments based on priorities
+- Determines people to contact or bookings to cancel or if event plans change
+
+Non functional:
+- Easy to navigate, single screen design
+- Light theme/ dark theme adaptable
+
+The application should satisfy the following conditions:
+- LLM (recommend using Llama 3.3 on Workers AI), or an external LLM of your choice
+- Workflow / coordination (recommend using Workflows, Workers or Durable Objects)
+- User input via chat or voice (recommend using Pages or Realtime)
+    Memory or state
+
+Show me your understanding of the instructions before creating initial documents
+"""
+
+"""
+
+"""
