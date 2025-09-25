@@ -1,6 +1,7 @@
 // AutoCal Frontend JavaScript
 class AutoCalApp {
     constructor() {
+        this.workerUrl = 'http://localhost:8787'; // Local development URL
         this.init();
     }
 
@@ -86,7 +87,7 @@ class AutoCalApp {
             this.setLoading(true);
             this.showAssistantResponse('Processing your request...');
             
-            // Make API call to worker
+            // Make real API call to worker
             const response = await this.callWorkerAPI(command);
             
             this.showAssistantResponse(response.message || 'Command processed successfully!');
@@ -101,24 +102,85 @@ class AutoCalApp {
             
         } catch (error) {
             console.error('Error:', error);
-            this.showAssistantResponse('Sorry, there was an error processing your request. Please try again.');
+            this.handleApiError(error);
         } finally {
             this.setLoading(false);
         }
     }
 
     async callWorkerAPI(command) {
-        // For Phase 1, we'll just simulate an API call
-        // In Phase 2, this will make actual requests to the Worker
+        const maxRetries = 3;
+        let lastError;
+
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+
+                const response = await fetch(`${this.workerUrl}/api/chat`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        command: command,
+                        timestamp: new Date().toISOString(),
+                        phase: 2
+                    }),
+                    signal: controller.signal
+                });
+
+                clearTimeout(timeoutId);
+
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({}));
+                    throw new Error(`HTTP ${response.status}: ${errorData.message || 'Unknown error'}`);
+                }
+
+                const data = await response.json();
+                
+                // Validate response structure
+                if (typeof data !== 'object' || !data.hasOwnProperty('message')) {
+                    throw new Error('Invalid response format from server');
+                }
+
+                return data;
+
+            } catch (error) {
+                lastError = error;
+                
+                if (error.name === 'AbortError') {
+                    throw new Error('Request timed out. Please try again.');
+                }
+                
+                if (attempt === maxRetries) {
+                    break;
+                }
+                
+                // Wait before retry (exponential backoff)
+                await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000));
+            }
+        }
+
+        throw lastError;
+    }
+
+    handleApiError(error) {
+        let message = 'Sorry, there was an error processing your request.';
         
-        // Simulate network delay
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+            message = 'Unable to connect to the server. Please check if the Worker is running and try again.';
+        } else if (error.message.includes('timed out')) {
+            message = 'Request timed out. Please try again.';
+        } else if (error.message.includes('HTTP 4')) {
+            message = 'There was an issue with your request. Please try a different command.';
+        } else if (error.message.includes('HTTP 5')) {
+            message = 'Server error occurred. Please try again in a moment.';
+        } else if (error.message) {
+            message = `Error: ${error.message}`;
+        }
         
-        // Return mock response for now
-        return {
-            message: `Received command: "${command}". Worker integration coming in Phase 2!`,
-            success: true
-        };
+        this.showAssistantResponse(message);
     }
 
     setLoading(isLoading) {
@@ -140,6 +202,12 @@ class AutoCalApp {
         const responseElement = document.getElementById('assistantResponse');
         responseElement.textContent = message;
         responseElement.style.fontStyle = message.includes('Welcome') ? 'italic' : 'normal';
+        
+        // Add timestamp for API responses
+        if (!message.includes('Welcome') && !message.includes('Please enter')) {
+            const timestamp = new Date().toLocaleTimeString();
+            responseElement.innerHTML = `${this.escapeHtml(message)} <small style="color: var(--text-muted); font-size: 0.8em;">(${timestamp})</small>`;
+        }
         
         // Announce to screen readers
         this.announceToScreenReader(message);

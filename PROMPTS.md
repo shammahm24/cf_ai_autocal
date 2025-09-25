@@ -1,3 +1,4 @@
+## Prompt 1
 """
 Do not code! We are building a short interactive AI app demo utilizing a Cloudflare centered stack. The app will be an interactive calender called AutoCal. 
 The first step will be to create a design doc used throughout the project design. the design doc will be in a plan directory.
@@ -20,6 +21,29 @@ The application should satisfy the following conditions:
 Show me your understanding of the instructions before creating initial documents
 """
 
+## Prompt 2
 """
+based on documentation, list the steps we need to take to get the project to completion
+"""
+
+## Prompt 3
+"""
+Run phase 1
+Setup & Infrastructure
+Initialize repository structure - Create directories: pages/, workers/, workflows/, docs/
+Create basic HTML interface with:
+Text input box for natural language commands
+Event display area
+Basic styling with theme toggle
+Set up basic Worker returning "ok" at /api
+Configure Wrangler for local development
+Test basic deployment to Cloudflare
+"""
+
+## Prompt 4
+"""
+We are moving to phase 2. State the steps involved first. Do not code
+"""
+
 
 """
