@@ -17,7 +17,7 @@
    cd workers
    npm install
    wrangler login
-   npm run dev
+   npx wrangler dev --local --port 8787
    ```
 
 3. **Test Frontend**:

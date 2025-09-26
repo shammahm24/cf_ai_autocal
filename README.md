@@ -60,3 +60,34 @@ cf_ai_autocal/
     ├── API.md              # API specifications
     └── DEPLOYMENT.md       # Deployment guide
 ```
+
+## Prerequisites
+- Node.js 18+
+- Cloudflare account
+- npm/wrangler CLI
+
+## Setup Steps
+
+1. **Install Wrangler**:
+   ```bash
+   npm install -g wrangler
+   ```
+
+2. **Setup Worker**:
+   ```bash
+   cd workers
+   npm install
+   wrangler login
+   npx wrangler dev --local --port 8787
+   ```
+
+3. **Test Frontend**:
+   ```bash
+   cd pages
+   python3 -m http.server 3000
+   ```
+
+## Testing
+- Worker: `http://localhost:8787/api` 
+- Frontend: `http://localhost:3000`
+- Test theme toggle and input form
