@@ -45,5 +45,12 @@ Test basic deployment to Cloudflare
 We are moving to phase 2. State the steps involved first. Do not code
 """
 
+## Prompt 5
+"""
+phase2 is complete, what are the steps for phase 3. Do not code
+"""
 
+## Prompt 6
+"""
+phase2 is complete, what are the steps for phase 3. Do not code
 """

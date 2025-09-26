@@ -945,9 +945,17 @@ var process_default = _process;
 // node_modules/wrangler/_virtual_unenv_global_polyfill-@cloudflare-unenv-preset-node-process
 globalThis.process = process_default;
 
-// index.js
-var index_default = {
-  async fetch(request, env2, ctx) {
+// calendar-do.js
+var CalendarDO = class {
+  static {
+    __name(this, "CalendarDO");
+  }
+  constructor(state, env2) {
+    this.state = state;
+    this.storage = state.storage;
+    this.env = env2;
+  }
+  async fetch(request) {
     const url = new URL(request.url);
     const corsHeaders = {
       "Access-Control-Allow-Origin": "*",
@@ -961,14 +969,382 @@ var index_default = {
       });
     }
     try {
+      if (url.pathname === "/add" && request.method === "POST") {
+        return await this.handleAddEvent(request, corsHeaders);
+      }
+      if (url.pathname === "/list" && request.method === "GET") {
+        return await this.handleListEvents(corsHeaders);
+      }
+      if (url.pathname.startsWith("/delete/") && request.method === "DELETE") {
+        const eventId = url.pathname.split("/")[2];
+        return await this.handleDeleteEvent(eventId, corsHeaders);
+      }
+      if (url.pathname.startsWith("/update/") && request.method === "PUT") {
+        const eventId = url.pathname.split("/")[2];
+        return await this.handleUpdateEvent(eventId, request, corsHeaders);
+      }
+      if (url.pathname === "/conflicts" && request.method === "POST") {
+        return await this.handleCheckConflicts(request, corsHeaders);
+      }
+      return new Response(
+        JSON.stringify({
+          error: "Unknown DO endpoint",
+          availableEndpoints: ["/add", "/list", "/delete/:id", "/update/:id", "/conflicts"]
+        }),
+        {
+          status: 404,
+          headers: { "Content-Type": "application/json", ...corsHeaders }
+        }
+      );
+    } catch (error3) {
+      console.error("DO Error:", error3);
+      return new Response(
+        JSON.stringify({
+          error: "Internal DO error",
+          message: error3.message
+        }),
+        {
+          status: 500,
+          headers: { "Content-Type": "application/json", ...corsHeaders }
+        }
+      );
+    }
+  }
+  async handleAddEvent(request, corsHeaders) {
+    try {
+      const eventData = await request.json();
+      const validationResult = this.validateEvent(eventData);
+      if (!validationResult.valid) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: validationResult.error
+          }),
+          {
+            status: 400,
+            headers: { "Content-Type": "application/json", ...corsHeaders }
+          }
+        );
+      }
+      const event = {
+        id: this.generateEventId(),
+        title: eventData.title,
+        datetime: eventData.datetime,
+        priority: eventData.priority || "medium",
+        participants: eventData.participants || [],
+        duration: eventData.duration || 60,
+        location: eventData.location || null,
+        description: eventData.description || null,
+        created: (/* @__PURE__ */ new Date()).toISOString(),
+        updated: (/* @__PURE__ */ new Date()).toISOString()
+      };
+      const conflicts = await this.checkConflicts(event);
+      if (conflicts.length > 0 && !eventData.forceAdd) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            hasConflicts: true,
+            conflicts,
+            event,
+            message: "Event conflicts detected. Add forceAdd: true to override."
+          }),
+          {
+            status: 409,
+            headers: { "Content-Type": "application/json", ...corsHeaders }
+          }
+        );
+      }
+      await this.storage.put(`event:${event.id}`, event);
+      const count3 = await this.getEventCount();
+      await this.storage.put("eventCount", count3 + 1);
+      return new Response(
+        JSON.stringify({
+          success: true,
+          event,
+          conflicts,
+          message: conflicts.length > 0 ? "Event added despite conflicts" : "Event added successfully"
+        }),
+        {
+          status: 201,
+          headers: { "Content-Type": "application/json", ...corsHeaders }
+        }
+      );
+    } catch (error3) {
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: "Failed to add event",
+          details: error3.message
+        }),
+        {
+          status: 500,
+          headers: { "Content-Type": "application/json", ...corsHeaders }
+        }
+      );
+    }
+  }
+  async handleListEvents(corsHeaders) {
+    try {
+      const events = await this.getAllEvents();
+      const count3 = await this.getEventCount();
+      return new Response(
+        JSON.stringify({
+          success: true,
+          events,
+          count: count3,
+          totalEvents: events.length
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json", ...corsHeaders }
+        }
+      );
+    } catch (error3) {
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: "Failed to retrieve events",
+          details: error3.message
+        }),
+        {
+          status: 500,
+          headers: { "Content-Type": "application/json", ...corsHeaders }
+        }
+      );
+    }
+  }
+  async handleDeleteEvent(eventId, corsHeaders) {
+    try {
+      const event = await this.storage.get(`event:${eventId}`);
+      if (!event) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: "Event not found"
+          }),
+          {
+            status: 404,
+            headers: { "Content-Type": "application/json", ...corsHeaders }
+          }
+        );
+      }
+      await this.storage.delete(`event:${eventId}`);
+      const count3 = await this.getEventCount();
+      await this.storage.put("eventCount", Math.max(0, count3 - 1));
+      return new Response(
+        JSON.stringify({
+          success: true,
+          deletedEvent: event,
+          message: "Event deleted successfully"
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json", ...corsHeaders }
+        }
+      );
+    } catch (error3) {
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: "Failed to delete event",
+          details: error3.message
+        }),
+        {
+          status: 500,
+          headers: { "Content-Type": "application/json", ...corsHeaders }
+        }
+      );
+    }
+  }
+  async handleUpdateEvent(eventId, request, corsHeaders) {
+    try {
+      const updates = await request.json();
+      const existingEvent = await this.storage.get(`event:${eventId}`);
+      if (!existingEvent) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: "Event not found"
+          }),
+          {
+            status: 404,
+            headers: { "Content-Type": "application/json", ...corsHeaders }
+          }
+        );
+      }
+      const updatedEvent = {
+        ...existingEvent,
+        ...updates,
+        id: eventId,
+        // Preserve ID
+        created: existingEvent.created,
+        // Preserve creation time
+        updated: (/* @__PURE__ */ new Date()).toISOString()
+      };
+      const validationResult = this.validateEvent(updatedEvent);
+      if (!validationResult.valid) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: validationResult.error
+          }),
+          {
+            status: 400,
+            headers: { "Content-Type": "application/json", ...corsHeaders }
+          }
+        );
+      }
+      await this.storage.put(`event:${eventId}`, updatedEvent);
+      return new Response(
+        JSON.stringify({
+          success: true,
+          event: updatedEvent,
+          message: "Event updated successfully"
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json", ...corsHeaders }
+        }
+      );
+    } catch (error3) {
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: "Failed to update event",
+          details: error3.message
+        }),
+        {
+          status: 500,
+          headers: { "Content-Type": "application/json", ...corsHeaders }
+        }
+      );
+    }
+  }
+  async handleCheckConflicts(request, corsHeaders) {
+    try {
+      const eventData = await request.json();
+      const conflicts = await this.checkConflicts(eventData);
+      return new Response(
+        JSON.stringify({
+          success: true,
+          hasConflicts: conflicts.length > 0,
+          conflicts
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json", ...corsHeaders }
+        }
+      );
+    } catch (error3) {
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: "Failed to check conflicts",
+          details: error3.message
+        }),
+        {
+          status: 500,
+          headers: { "Content-Type": "application/json", ...corsHeaders }
+        }
+      );
+    }
+  }
+  async getAllEvents() {
+    const events = [];
+    const list = await this.storage.list({ prefix: "event:" });
+    for (const [key, value] of list) {
+      events.push(value);
+    }
+    return events.sort((a, b) => new Date(a.datetime) - new Date(b.datetime));
+  }
+  async checkConflicts(newEvent) {
+    const existingEvents = await this.getAllEvents();
+    const conflicts = [];
+    const newStart = new Date(newEvent.datetime);
+    const newEnd = new Date(newStart.getTime() + (newEvent.duration || 60) * 6e4);
+    for (const event of existingEvents) {
+      if (event.id === newEvent.id) continue;
+      const eventStart = new Date(event.datetime);
+      const eventEnd = new Date(eventStart.getTime() + (event.duration || 60) * 6e4);
+      if (newStart < eventEnd && newEnd > eventStart) {
+        conflicts.push({
+          conflictingEvent: event,
+          overlapStart: new Date(Math.max(newStart, eventStart)).toISOString(),
+          overlapEnd: new Date(Math.min(newEnd, eventEnd)).toISOString(),
+          suggestion: this.generateConflictSuggestion(newEvent, event)
+        });
+      }
+    }
+    return conflicts;
+  }
+  generateConflictSuggestion(newEvent, conflictingEvent) {
+    const suggestions = [];
+    const conflictEnd = new Date(new Date(conflictingEvent.datetime).getTime() + (conflictingEvent.duration || 60) * 6e4);
+    const afterTime = new Date(conflictEnd.getTime() + 15 * 6e4);
+    suggestions.push(`Consider scheduling at ${afterTime.toLocaleTimeString()} instead`);
+    const newDate = new Date(newEvent.datetime);
+    const conflictDate = new Date(conflictingEvent.datetime);
+    if (newDate.toDateString() === conflictDate.toDateString()) {
+      const nextDay = new Date(newDate);
+      nextDay.setDate(nextDay.getDate() + 1);
+      suggestions.push(`Consider moving to ${nextDay.toLocaleDateString()}`);
+    }
+    return suggestions;
+  }
+  validateEvent(event) {
+    if (!event.title || typeof event.title !== "string") {
+      return { valid: false, error: "Event title is required and must be a string" };
+    }
+    if (!event.datetime) {
+      return { valid: false, error: "Event datetime is required" };
+    }
+    const date = new Date(event.datetime);
+    if (isNaN(date.getTime())) {
+      return { valid: false, error: "Invalid datetime format" };
+    }
+    if (event.title.length > 200) {
+      return { valid: false, error: "Event title too long (max 200 characters)" };
+    }
+    if (event.duration && (typeof event.duration !== "number" || event.duration <= 0 || event.duration > 1440)) {
+      return { valid: false, error: "Duration must be a positive number <= 1440 minutes" };
+    }
+    return { valid: true };
+  }
+  async getEventCount() {
+    const count3 = await this.storage.get("eventCount");
+    return count3 || 0;
+  }
+  generateEventId() {
+    return Date.now().toString(36) + Math.random().toString(36).substr(2);
+  }
+};
+
+// index.js
+var index_default = {
+  async fetch(request, env2, ctx) {
+    const url = new URL(request.url);
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Session-ID"
+    };
+    if (request.method === "OPTIONS") {
+      return new Response(null, {
+        status: 204,
+        headers: corsHeaders
+      });
+    }
+    try {
+      const sessionId = getSessionId(request);
       if (url.pathname === "/api" || url.pathname === "/api/") {
         return new Response(
           JSON.stringify({
             message: "ok",
             status: "success",
-            phase: 2,
+            phase: 3,
             timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-            note: "Use /api/chat for interactive commands"
+            sessionId,
+            note: "Use /api/chat for commands, /api/events/* for event management"
           }),
           {
             status: 200,
@@ -984,9 +1360,9 @@ var index_default = {
           JSON.stringify({
             status: "healthy",
             version: "1.0.0",
-            phase: 2,
+            phase: 3,
             uptime: Date.now(),
-            features: ["cors", "chat-api", "error-handling"]
+            features: ["cors", "chat-api", "durable-objects", "event-storage", "conflict-detection"]
           }),
           {
             status: 200,
@@ -1018,13 +1394,14 @@ var index_default = {
                 }
               );
             }
-            const response = await processCommand(body.command, body);
+            const response = await processCommandWithStorage(body.command, body, sessionId, env2);
             return new Response(
               JSON.stringify({
                 ...response,
                 status: "success",
-                phase: 2,
+                phase: 3,
                 timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+                sessionId,
                 requestId: generateRequestId()
               }),
               {
@@ -1086,12 +1463,15 @@ var index_default = {
           }
         );
       }
+      if (url.pathname.startsWith("/api/events")) {
+        return await handleEventRequest(request, sessionId, env2, corsHeaders);
+      }
       return new Response(
         JSON.stringify({
           message: "Endpoint not found",
           status: "error",
           code: "NOT_FOUND",
-          availableEndpoints: ["/api", "/health", "/api/chat"]
+          availableEndpoints: ["/api", "/health", "/api/chat", "/api/events/*"]
         }),
         {
           status: 404,
@@ -1121,6 +1501,465 @@ var index_default = {
     }
   }
 };
+async function handleEventRequest(request, sessionId, env2, corsHeaders) {
+  try {
+    const calendarDO = getCalendarDO(sessionId, env2);
+    const url = new URL(request.url);
+    let doPath = url.pathname.replace("/api/events", "");
+    if (doPath === "" || doPath === "/") {
+      doPath = "/list";
+    }
+    const doUrl = new URL(`https://fake-host${doPath}`);
+    doUrl.search = url.search;
+    const doRequest = new Request(doUrl.toString(), {
+      method: request.method,
+      headers: request.headers,
+      body: request.method !== "GET" && request.method !== "HEAD" ? request.body : null
+    });
+    return await calendarDO.fetch(doRequest);
+  } catch (error3) {
+    console.error("Event request error:", error3);
+    return new Response(
+      JSON.stringify({
+        success: false,
+        error: "Failed to process event request",
+        details: error3.message
+      }),
+      {
+        status: 500,
+        headers: {
+          "Content-Type": "application/json",
+          ...corsHeaders
+        }
+      }
+    );
+  }
+}
+__name(handleEventRequest, "handleEventRequest");
+async function processCommandWithStorage(command, requestData, sessionId, env2) {
+  const trimmedCommand = command.trim().toLowerCase();
+  const analysis = analyzeCommand(trimmedCommand);
+  const response = {
+    message: `\u{1F4AC} Processing: "${command}"`,
+    originalCommand: command,
+    commandLength: command.length,
+    analysis,
+    phase: 3,
+    conversationType: determineConversationType(trimmedCommand)
+  };
+  const calendarDO = getCalendarDO(sessionId, env2);
+  try {
+    switch (response.conversationType) {
+      case "create":
+        return await handleEventCreation(command, analysis, calendarDO, response);
+      case "query":
+        return await handleEventQuery(trimmedCommand, calendarDO, response);
+      case "modify":
+        return await handleEventModification(trimmedCommand, calendarDO, response);
+      case "delete":
+        return await handleEventDeletion(trimmedCommand, calendarDO, response);
+      case "conflict_check":
+        return await handleConflictCheck(trimmedCommand, calendarDO, response);
+      case "general":
+        return await handleGeneralConversation(trimmedCommand, calendarDO, response);
+      default:
+        response.message = `\u{1F914} I understand you said "${command}" but I'm not sure how to help. Try asking about your events or creating new ones.`;
+        response.suggestions = [
+          "Ask: 'What's my schedule today?'",
+          "Create: 'Book lunch tomorrow at 1pm'",
+          "Check: 'Do I have any conflicts?'"
+        ];
+        return response;
+    }
+  } catch (error3) {
+    console.error("Command processing error:", error3);
+    response.message = `\u274C Error processing your request: ${error3.message}`;
+    response.error = error3.message;
+    return response;
+  }
+}
+__name(processCommandWithStorage, "processCommandWithStorage");
+function determineConversationType(command) {
+  if (/\b(book|schedule|add|create|set up|plan|make)\b/.test(command) && (/\b(at|on|for|next|this|tomorrow|today)\b/.test(command) || /\d{1,2}:\d{2}|\d{1,2}\s*(am|pm)/.test(command))) {
+    return "create";
+  }
+  if (/\b(what|when|where|who|how|show|list|find|search|tell me|what's)\b/.test(command)) {
+    return "query";
+  }
+  if (/\b(change|update|modify|move|reschedule|edit)\b/.test(command)) {
+    return "modify";
+  }
+  if (/\b(delete|remove|cancel|clear)\b/.test(command)) {
+    return "delete";
+  }
+  if (/\b(conflicts?|clash|overlap|busy|free|available)\b/.test(command)) {
+    return "conflict_check";
+  }
+  if (/\b(calendar|schedule|event|appointment|meeting|plan)\b/.test(command)) {
+    return "general";
+  }
+  return "unknown";
+}
+__name(determineConversationType, "determineConversationType");
+async function handleEventCreation(command, analysis, calendarDO, response) {
+  if (shouldCreateEvent(analysis, command.toLowerCase())) {
+    const eventData = extractEventFromCommand(command, analysis);
+    if (eventData) {
+      const doRequest = new Request("https://fake-host/add", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(eventData)
+      });
+      const doResponse = await calendarDO.fetch(doRequest);
+      const result = await doResponse.json();
+      if (result.success) {
+        response.message = `\u2705 Great! I've created "${eventData.title}" for ${formatDateTime(eventData.datetime)}`;
+        response.eventCreated = result.event;
+        response.conflicts = result.conflicts || [];
+        if (result.conflicts && result.conflicts.length > 0) {
+          response.message += `
+\u26A0\uFE0F Note: This conflicts with ${result.conflicts.length} other event${result.conflicts.length > 1 ? "s" : ""}. You can still keep it or let me suggest alternatives.`;
+        }
+      } else if (result.hasConflicts) {
+        response.message = `\u{1F914} I can create "${eventData.title}" but it conflicts with existing events. Would you like me to suggest alternative times?`;
+        response.eventData = eventData;
+        response.conflicts = result.conflicts;
+        response.canForceAdd = true;
+      } else {
+        response.message = `\u274C I couldn't create the event: ${result.error}`;
+      }
+    } else {
+      response.message = `\u{1F914} I understand you want to create an event, but I need more details. Can you specify a time and date?`;
+      response.suggestions = [
+        "Try: 'Book lunch tomorrow at 1pm'",
+        "Or: 'Schedule meeting with team Friday at 2pm'"
+      ];
+    }
+  } else {
+    response.message = `\u{1F914} It sounds like you want to create something, but I need more information. What would you like to schedule?`;
+    response.suggestions = [
+      "Include a time: 'at 2pm' or 'tomorrow'",
+      "Be specific: 'Book lunch with Sam Friday at noon'"
+    ];
+  }
+  return response;
+}
+__name(handleEventCreation, "handleEventCreation");
+async function handleEventQuery(command, calendarDO, response) {
+  const doRequest = new Request("https://fake-host/list", { method: "GET" });
+  const doResponse = await calendarDO.fetch(doRequest);
+  const result = await doResponse.json();
+  if (!result.success) {
+    response.message = "\u274C I couldn't retrieve your events right now.";
+    return response;
+  }
+  const events = result.events || [];
+  if (/\b(today|today's)\b/.test(command)) {
+    const todayEvents = filterEventsByDate(events, /* @__PURE__ */ new Date());
+    response.message = formatEventsResponse(todayEvents, "today");
+  } else if (/\b(tomorrow|tomorrow's)\b/.test(command)) {
+    const tomorrow = /* @__PURE__ */ new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowEvents = filterEventsByDate(events, tomorrow);
+    response.message = formatEventsResponse(tomorrowEvents, "tomorrow");
+  } else if (/\b(week|this week)\b/.test(command)) {
+    const weekEvents = filterEventsThisWeek(events);
+    response.message = formatEventsResponse(weekEvents, "this week");
+  } else if (/\b(next|upcoming)\b/.test(command)) {
+    const upcomingEvents = events.slice(0, 5);
+    response.message = formatEventsResponse(upcomingEvents, "upcoming");
+  } else if (/\b(all|everything|schedule)\b/.test(command)) {
+    response.message = formatEventsResponse(events, "all your events");
+  } else if (/\b(with|participant)\b/.test(command)) {
+    const participant = extractParticipantFromQuery(command);
+    const participantEvents = filterEventsByParticipant(events, participant);
+    response.message = formatEventsResponse(participantEvents, `events with ${participant}`);
+  } else if (/\b(count|how many)\b/.test(command)) {
+    response.message = `\u{1F4CA} You have ${events.length} event${events.length !== 1 ? "s" : ""} scheduled total.`;
+  } else {
+    response.message = formatEventsResponse(events, "your schedule");
+  }
+  response.events = events;
+  return response;
+}
+__name(handleEventQuery, "handleEventQuery");
+async function handleEventModification(command, calendarDO, response) {
+  response.message = `\u{1F527} I can help you modify events! However, the full modification feature will be enhanced in Phase 4 with AI. For now, you can:`;
+  response.suggestions = [
+    "Delete the event and create a new one",
+    "Tell me which event to change and I'll guide you",
+    "Use the delete button (\u{1F5D1}\uFE0F) in the events list"
+  ];
+  if (/\b(lunch|meeting|appointment|dinner)\b/.test(command)) {
+    const doRequest = new Request("https://fake-host/list", { method: "GET" });
+    const doResponse = await calendarDO.fetch(doRequest);
+    const result = await doResponse.json();
+    if (result.success && result.events.length > 0) {
+      response.message += `
+
+\u{1F4C5} Here are your current events that might match:`;
+      response.events = result.events;
+    }
+  }
+  return response;
+}
+__name(handleEventModification, "handleEventModification");
+async function handleEventDeletion(command, calendarDO, response) {
+  response.message = `\u{1F5D1}\uFE0F I can help you delete events! You can:`;
+  response.suggestions = [
+    "Use the trash button (\u{1F5D1}\uFE0F) next to any event in the list",
+    "Tell me specifically which event to delete",
+    "Say 'delete my lunch meeting' for example"
+  ];
+  const doRequest = new Request("https://fake-host/list", { method: "GET" });
+  const doResponse = await calendarDO.fetch(doRequest);
+  const result = await doResponse.json();
+  if (result.success && result.events.length > 0) {
+    response.message += `
+
+\u{1F4C5} Your current events:`;
+    response.events = result.events;
+  } else {
+    response.message = `\u{1F937} You don't have any events to delete right now.`;
+  }
+  return response;
+}
+__name(handleEventDeletion, "handleEventDeletion");
+async function handleConflictCheck(command, calendarDO, response) {
+  const doRequest = new Request("https://fake-host/list", { method: "GET" });
+  const doResponse = await calendarDO.fetch(doRequest);
+  const result = await doResponse.json();
+  if (!result.success) {
+    response.message = "\u274C I couldn't check for conflicts right now.";
+    return response;
+  }
+  const events = result.events || [];
+  const conflicts = findExistingConflicts(events);
+  if (conflicts.length === 0) {
+    response.message = "\u2705 Great news! You don't have any scheduling conflicts.";
+  } else {
+    response.message = `\u26A0\uFE0F I found ${conflicts.length} scheduling conflict${conflicts.length > 1 ? "s" : ""}:`;
+    response.conflicts = conflicts;
+  }
+  response.events = events;
+  return response;
+}
+__name(handleConflictCheck, "handleConflictCheck");
+async function handleGeneralConversation(command, calendarDO, response) {
+  const doRequest = new Request("https://fake-host/list", { method: "GET" });
+  const doResponse = await calendarDO.fetch(doRequest);
+  const result = await doResponse.json();
+  const events = result.success ? result.events || [] : [];
+  response.message = `\u{1F4C5} I'm here to help with your calendar! You have ${events.length} event${events.length !== 1 ? "s" : ""} scheduled.`;
+  if (events.length === 0) {
+    response.message += ` Let's start by creating your first event!`;
+    response.suggestions = [
+      "Try: 'Book lunch tomorrow at 1pm'",
+      "Or: 'Schedule meeting with team Friday'",
+      "Ask: 'What can you help me with?'"
+    ];
+  } else {
+    response.suggestions = [
+      "Ask: 'What's my schedule today?'",
+      "Create: 'Book dinner with friends Saturday'",
+      "Check: 'Do I have any conflicts?'",
+      "Query: 'Show me all my meetings'"
+    ];
+  }
+  response.events = events;
+  response.capabilities = [
+    "Create events from natural language",
+    "Check your schedule for any time period",
+    "Detect and warn about conflicts",
+    "Help manage your calendar efficiently"
+  ];
+  return response;
+}
+__name(handleGeneralConversation, "handleGeneralConversation");
+function filterEventsByDate(events, targetDate) {
+  const targetDateStr = targetDate.toDateString();
+  return events.filter((event) => {
+    const eventDate = new Date(event.datetime);
+    return eventDate.toDateString() === targetDateStr;
+  });
+}
+__name(filterEventsByDate, "filterEventsByDate");
+function filterEventsThisWeek(events) {
+  const now = /* @__PURE__ */ new Date();
+  const weekStart = new Date(now.setDate(now.getDate() - now.getDay()));
+  const weekEnd = new Date(weekStart);
+  weekEnd.setDate(weekEnd.getDate() + 7);
+  return events.filter((event) => {
+    const eventDate = new Date(event.datetime);
+    return eventDate >= weekStart && eventDate < weekEnd;
+  });
+}
+__name(filterEventsThisWeek, "filterEventsThisWeek");
+function filterEventsByParticipant(events, participant) {
+  if (!participant) return [];
+  return events.filter(
+    (event) => event.participants && event.participants.some(
+      (p) => p.toLowerCase().includes(participant.toLowerCase())
+    )
+  );
+}
+__name(filterEventsByParticipant, "filterEventsByParticipant");
+function extractParticipantFromQuery(command) {
+  const withMatch = command.match(/with\s+([a-zA-Z]+)/);
+  return withMatch ? withMatch[1] : "";
+}
+__name(extractParticipantFromQuery, "extractParticipantFromQuery");
+function formatEventsResponse(events, timeframe) {
+  if (events.length === 0) {
+    return `\u{1F4C5} You don't have any events ${timeframe}.`;
+  }
+  let message = `\u{1F4C5} Here's ${timeframe} (${events.length} event${events.length !== 1 ? "s" : ""}):
+
+`;
+  events.forEach((event) => {
+    const date = new Date(event.datetime);
+    const timeStr = date.toLocaleString("en-US", {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit"
+    });
+    message += `\u2022 ${event.title} - ${timeStr}`;
+    if (event.participants && event.participants.length > 0) {
+      message += ` (with ${event.participants.join(", ")})`;
+    }
+    message += "\n";
+  });
+  return message.trim();
+}
+__name(formatEventsResponse, "formatEventsResponse");
+function findExistingConflicts(events) {
+  const conflicts = [];
+  for (let i = 0; i < events.length; i++) {
+    for (let j = i + 1; j < events.length; j++) {
+      const event1 = events[i];
+      const event2 = events[j];
+      const start1 = new Date(event1.datetime);
+      const end1 = new Date(start1.getTime() + (event1.duration || 60) * 6e4);
+      const start2 = new Date(event2.datetime);
+      const end2 = new Date(start2.getTime() + (event2.duration || 60) * 6e4);
+      if (start1 < end2 && start2 < end1) {
+        conflicts.push({
+          event1,
+          event2,
+          overlapStart: new Date(Math.max(start1, start2)).toISOString(),
+          overlapEnd: new Date(Math.min(end1, end2)).toISOString()
+        });
+      }
+    }
+  }
+  return conflicts;
+}
+__name(findExistingConflicts, "findExistingConflicts");
+function formatDateTime(datetime) {
+  return new Date(datetime).toLocaleString("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+__name(formatDateTime, "formatDateTime");
+function shouldCreateEvent(analysis, command) {
+  const creationKeywords = ["book", "schedule", "add", "create", "set up", "plan"];
+  const hasCreationKeyword = creationKeywords.some((keyword) => command.includes(keyword));
+  return hasCreationKeyword && (analysis.hasTime || analysis.hasDate) && analysis.eventType !== "unknown";
+}
+__name(shouldCreateEvent, "shouldCreateEvent");
+function extractEventFromCommand(command, analysis) {
+  try {
+    const title2 = extractTitle(command);
+    const datetime = extractDateTime(command);
+    if (!title2 || !datetime) {
+      return null;
+    }
+    return {
+      title: title2,
+      datetime,
+      priority: "medium",
+      duration: analysis.eventType === "meal" ? 60 : 30,
+      participants: extractParticipants(command)
+    };
+  } catch (error3) {
+    console.error("Event extraction error:", error3);
+    return null;
+  }
+}
+__name(extractEventFromCommand, "extractEventFromCommand");
+function extractTitle(command) {
+  let title2 = command.replace(/^(book|schedule|add|create|set up|plan)\s+/i, "").replace(/\s+(at|on|for|with|next|this|tomorrow|today)\s+.*$/i, "").trim();
+  if (title2.length === 0) {
+    if (command.includes("lunch")) return "Lunch";
+    if (command.includes("meeting")) return "Meeting";
+    if (command.includes("call")) return "Call";
+    if (command.includes("appointment")) return "Appointment";
+    return "Event";
+  }
+  return title2.charAt(0).toUpperCase() + title2.slice(1);
+}
+__name(extractTitle, "extractTitle");
+function extractDateTime(command) {
+  const now = /* @__PURE__ */ new Date();
+  const timeMatch = command.match(/(\d{1,2}):?(\d{2})?\s*(am|pm)/i) || command.match(/(\d{1,2})\s*(am|pm)/i);
+  let hour = 12;
+  let minute = 0;
+  if (timeMatch) {
+    hour = parseInt(timeMatch[1]);
+    minute = timeMatch[2] ? parseInt(timeMatch[2]) : 0;
+    if (timeMatch[3] && timeMatch[3].toLowerCase() === "pm" && hour !== 12) {
+      hour += 12;
+    } else if (timeMatch[3] && timeMatch[3].toLowerCase() === "am" && hour === 12) {
+      hour = 0;
+    }
+  }
+  let targetDate = new Date(now);
+  if (command.includes("tomorrow")) {
+    targetDate.setDate(targetDate.getDate() + 1);
+  } else if (command.includes("next thursday") || command.includes("thursday")) {
+    const daysUntilThursday = (4 - targetDate.getDay() + 7) % 7 || 7;
+    targetDate.setDate(targetDate.getDate() + daysUntilThursday);
+  } else if (command.includes("friday")) {
+    const daysUntilFriday = (5 - targetDate.getDay() + 7) % 7 || 7;
+    targetDate.setDate(targetDate.getDate() + daysUntilFriday);
+  }
+  targetDate.setHours(hour, minute, 0, 0);
+  return targetDate.toISOString();
+}
+__name(extractDateTime, "extractDateTime");
+function extractParticipants(command) {
+  const participants = [];
+  const withMatch = command.match(/with\s+([^at|on|for|next|this|tomorrow|today]+)/i);
+  if (withMatch) {
+    const names = withMatch[1].trim().split(/\s+and\s+|\s*,\s*/);
+    participants.push(...names.filter((name) => name.length > 0));
+  }
+  return participants;
+}
+__name(extractParticipants, "extractParticipants");
+function getCalendarDO(sessionId, env2) {
+  const doId = env2.CALENDAR_DO.idFromName(sessionId);
+  return env2.CALENDAR_DO.get(doId);
+}
+__name(getCalendarDO, "getCalendarDO");
+function getSessionId(request) {
+  let sessionId = request.headers.get("X-Session-ID");
+  if (!sessionId) {
+    sessionId = generateSessionId();
+  }
+  return sessionId;
+}
+__name(getSessionId, "getSessionId");
+function generateSessionId() {
+  return "session_" + Date.now().toString(36) + Math.random().toString(36).substr(2);
+}
+__name(generateSessionId, "generateSessionId");
 function validateChatRequest(body) {
   if (!body || typeof body !== "object") {
     return { valid: false, error: "Request body must be a JSON object" };
@@ -1137,33 +1976,10 @@ function validateChatRequest(body) {
   return { valid: true };
 }
 __name(validateChatRequest, "validateChatRequest");
-async function processCommand(command, requestData) {
-  const trimmedCommand = command.trim().toLowerCase();
-  const response = {
-    message: `\u2713 Command received and processed: "${command}"`,
-    originalCommand: command,
-    commandLength: command.length,
-    analysis: analyzeCommand(trimmedCommand),
-    phase: 2,
-    nextSteps: "In Phase 3, this will be stored in a Durable Object. In Phase 4, AI will parse this command into structured events."
-  };
-  if (trimmedCommand.includes("lunch") || trimmedCommand.includes("dinner") || trimmedCommand.includes("breakfast")) {
-    response.insights = ["This appears to be a meal-related event", "Consider setting a reminder 15 minutes before"];
-  }
-  if (trimmedCommand.includes("meeting") || trimmedCommand.includes("call")) {
-    response.insights = ["This appears to be a meeting event", "You might want to add attendees", "Consider blocking time for preparation"];
-  }
-  if (trimmedCommand.match(/\d{1,2}:\d{2}|\d{1,2}\s*(am|pm)/)) {
-    response.insights = response.insights || [];
-    response.insights.push("Time detected in command");
-  }
-  return response;
-}
-__name(processCommand, "processCommand");
 function analyzeCommand(command) {
   const analysis = {
     wordCount: command.split(/\s+/).length,
-    hasTime: /\d{1,2}:\d{2}|\d{1,2}\s*(am|pm)/.test(command),
+    hasTime: /\d{1,2}:?\d{0,2}\s*(am|pm)|\d{1,2}:\d{2}/.test(command),
     hasDate: /(monday|tuesday|wednesday|thursday|friday|saturday|sunday|today|tomorrow|next|this)/.test(command),
     eventType: "unknown"
   };
@@ -1225,7 +2041,7 @@ var jsonError = /* @__PURE__ */ __name(async (request, env2, _ctx, middlewareCtx
 }, "jsonError");
 var middleware_miniflare3_json_error_default = jsonError;
 
-// .wrangler/tmp/bundle-GYjr1f/middleware-insertion-facade.js
+// .wrangler/tmp/bundle-iRK2sU/middleware-insertion-facade.js
 var __INTERNAL_WRANGLER_MIDDLEWARE__ = [
   middleware_ensure_req_body_drained_default,
   middleware_miniflare3_json_error_default
@@ -1257,7 +2073,7 @@ function __facade_invoke__(request, env2, ctx, dispatch, finalMiddleware) {
 }
 __name(__facade_invoke__, "__facade_invoke__");
 
-// .wrangler/tmp/bundle-GYjr1f/middleware-loader.entry.ts
+// .wrangler/tmp/bundle-iRK2sU/middleware-loader.entry.ts
 var __Facade_ScheduledController__ = class ___Facade_ScheduledController__ {
   constructor(scheduledTime, cron, noRetry) {
     this.scheduledTime = scheduledTime;
@@ -1354,6 +2170,7 @@ if (typeof middleware_insertion_facade_default === "object") {
 }
 var middleware_loader_entry_default = WRAPPED_ENTRY;
 export {
+  CalendarDO,
   __INTERNAL_WRANGLER_MIDDLEWARE__,
   middleware_loader_entry_default as default
 };

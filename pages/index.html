@@ -10,7 +10,7 @@
     <div class="container">
         <header>
             <h1>AutoCal</h1>
-            <p class="subtitle">AI-powered calendar management</p>
+            <p class="subtitle">Your AI calendar assistant</p>
             <button class="theme-toggle" id="themeToggle" aria-label="Toggle theme">
                 <span class="theme-icon">🌙</span>
             </button>
@@ -23,11 +23,11 @@
                     <input 
                         type="text" 
                         id="commandInput" 
-                        placeholder="Try: 'Book lunch with Sam next Thursday at 1pm'"
+                        placeholder="Ask me anything about your calendar... 'What's my schedule today?' or 'Book lunch tomorrow at 1pm'"
                         class="command-input"
                         autocomplete="off"
                     >
-                    <button id="submitBtn" class="submit-btn">Add Event</button>
+                    <button id="submitBtn" class="submit-btn">Send</button>
                 </div>
                 <div class="loading" id="loading" style="display: none;">
                     <div class="spinner"></div>
@@ -37,23 +37,23 @@
 
             <!-- Assistant Response Section -->
             <section class="assistant-section">
-                <h2>Assistant</h2>
+                <h2>💬 Chat</h2>
                 <div id="assistantResponse" class="assistant-response">
-                    Welcome to AutoCal! Type a natural language command to create calendar events.
+                    Hi! I'm your AI calendar assistant. You can ask me about your schedule, create new events, check for conflicts, or have a conversation about your calendar. Try asking "What's my schedule today?" or "Book lunch with Sarah tomorrow at 1pm"
                 </div>
             </section>
 
             <!-- Events Display Section -->
             <section class="events-section">
-                <h2>Your Events</h2>
+                <h2>📅 Your Calendar</h2>
                 <div id="eventsList" class="events-list">
-                    <div class="no-events">No events yet. Create your first event above!</div>
+                    <div class="no-events">No events yet. Ask me to create your first event!</div>
                 </div>
             </section>
         </main>
 
         <footer>
-            <p>Powered by Cloudflare Workers AI</p>
+            <p>Powered by Cloudflare Workers AI • Phase 3: Persistent Storage</p>
         </footer>
     </div>
 

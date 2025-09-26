@@ -1,7 +1,8 @@
-// AutoCal Frontend JavaScript
+// AutoCal Frontend JavaScript - Phase 3
 class AutoCalApp {
     constructor() {
         this.workerUrl = 'http://localhost:8787'; // Local development URL
+        this.sessionId = this.getOrCreateSessionId();
         this.init();
     }
 
@@ -9,6 +10,16 @@ class AutoCalApp {
         this.setupEventListeners();
         this.loadTheme();
         this.setupKeyboardShortcuts();
+        this.loadStoredEvents(); // Load events on page load
+    }
+
+    getOrCreateSessionId() {
+        let sessionId = localStorage.getItem('autocal-session-id');
+        if (!sessionId) {
+            sessionId = 'session_' + Date.now().toString(36) + Math.random().toString(36).substr(2);
+            localStorage.setItem('autocal-session-id', sessionId);
+        }
+        return sessionId;
     }
 
     setupEventListeners() {
@@ -44,6 +55,12 @@ class AutoCalApp {
                 e.preventDefault();
                 this.toggleTheme();
             }
+
+            // Ctrl/Cmd + R to refresh events
+            if ((e.ctrlKey || e.metaKey) && e.key === 'r') {
+                e.preventDefault();
+                this.loadStoredEvents();
+            }
         });
     }
 
@@ -74,6 +91,31 @@ class AutoCalApp {
         themeIcon.textContent = theme === 'dark' ? '☀️' : '🌙';
     }
 
+    async loadStoredEvents() {
+        try {
+            const response = await fetch(`${this.workerUrl}/api/events`, {
+                method: 'GET',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Session-ID': this.sessionId
+                }
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                if (data.success && data.events) {
+                    this.updateEventsList(data.events);
+                    this.updateEventCount(data.totalEvents || 0);
+                } else {
+                    console.warn('Failed to load events:', data.error);
+                }
+            }
+        } catch (error) {
+            console.error('Error loading stored events:', error);
+            // Don't show error to user on page load - events list will show "no events"
+        }
+    }
+
     async handleSubmit() {
         const input = document.getElementById('commandInput');
         const command = input.value.trim();
@@ -95,9 +137,14 @@ class AutoCalApp {
             // Clear input on success
             input.value = '';
             
-            // If events are returned, update the display
-            if (response.events) {
-                this.updateEventsList(response.events);
+            // If an event was created, refresh the events list
+            if (response.eventCreated) {
+                setTimeout(() => this.loadStoredEvents(), 500); // Small delay to ensure storage is complete
+            }
+            
+            // Show conflicts if any
+            if (response.conflicts && response.conflicts.length > 0) {
+                this.showConflicts(response.conflicts);
             }
             
         } catch (error) {
@@ -121,11 +168,13 @@ class AutoCalApp {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
+                        'X-Session-ID': this.sessionId
                     },
                     body: JSON.stringify({
                         command: command,
                         timestamp: new Date().toISOString(),
-                        phase: 2
+                        phase: 3,
+                        sessionId: this.sessionId
                     }),
                     signal: controller.signal
                 });
@@ -165,6 +214,30 @@ class AutoCalApp {
         throw lastError;
     }
 
+    async deleteEvent(eventId) {
+        try {
+            const response = await fetch(`${this.workerUrl}/api/events/delete/${eventId}`, {
+                method: 'DELETE',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Session-ID': this.sessionId
+                }
+            });
+
+            const data = await response.json();
+            
+            if (data.success) {
+                this.showAssistantResponse(`Event "${data.deletedEvent.title}" deleted successfully.`);
+                this.loadStoredEvents(); // Refresh events list
+            } else {
+                this.showAssistantResponse(`Failed to delete event: ${data.error}`);
+            }
+        } catch (error) {
+            console.error('Delete error:', error);
+            this.showAssistantResponse('Error deleting event. Please try again.');
+        }
+    }
+
     handleApiError(error) {
         let message = 'Sorry, there was an error processing your request.';
         
@@ -190,21 +263,21 @@ class AutoCalApp {
         if (isLoading) {
             loading.style.display = 'flex';
             submitBtn.disabled = true;
-            submitBtn.textContent = 'Processing...';
+            submitBtn.textContent = 'Thinking...';
         } else {
             loading.style.display = 'none';
             submitBtn.disabled = false;
-            submitBtn.textContent = 'Add Event';
+            submitBtn.textContent = 'Send';
         }
     }
 
     showAssistantResponse(message) {
         const responseElement = document.getElementById('assistantResponse');
         responseElement.textContent = message;
-        responseElement.style.fontStyle = message.includes('Welcome') ? 'italic' : 'normal';
+        responseElement.style.fontStyle = message.includes('Hi! I\'m your') ? 'italic' : 'normal';
         
         // Add timestamp for API responses
-        if (!message.includes('Welcome') && !message.includes('Please enter')) {
+        if (!message.includes('Hi! I\'m your') && !message.includes('Please enter')) {
             const timestamp = new Date().toLocaleTimeString();
             responseElement.innerHTML = `${this.escapeHtml(message)} <small style="color: var(--text-muted); font-size: 0.8em;">(${timestamp})</small>`;
         }
@@ -213,22 +286,62 @@ class AutoCalApp {
         this.announceToScreenReader(message);
     }
 
+    showConflicts(conflicts) {
+        if (!conflicts || conflicts.length === 0) return;
+        
+        const responseElement = document.getElementById('assistantResponse');
+        let conflictHtml = `<div style="margin-top: 10px; padding: 10px; background: var(--warning-color); color: white; border-radius: 5px;">`;
+        conflictHtml += `<strong>⚠️ Scheduling Conflicts:</strong><br>`;
+        
+        conflicts.forEach(conflict => {
+            conflictHtml += `• Conflicts with "${conflict.conflictingEvent.title}" at ${this.formatDateTime(conflict.conflictingEvent.datetime)}<br>`;
+            if (conflict.suggestion && conflict.suggestion.length > 0) {
+                conflictHtml += `  Suggestion: ${conflict.suggestion[0]}<br>`;
+            }
+        });
+        
+        conflictHtml += `</div>`;
+        responseElement.innerHTML += conflictHtml;
+    }
+
     updateEventsList(events) {
         const eventsContainer = document.getElementById('eventsList');
         
         if (!events || events.length === 0) {
-            eventsContainer.innerHTML = '<div class="no-events">No events yet. Create your first event above!</div>';
+            eventsContainer.innerHTML = '<div class="no-events">No events yet. Ask me to create your first event!</div>';
             return;
         }
 
         const eventsHTML = events.map(event => `
-            <div class="event-item">
-                <div class="event-title">${this.escapeHtml(event.title)}</div>
+            <div class="event-item" data-event-id="${event.id}">
+                <div class="event-header">
+                    <div class="event-title">${this.escapeHtml(event.title)}</div>
+                    <button class="delete-btn" onclick="window.autoCalApp.deleteEvent('${event.id}')" aria-label="Delete event">
+                        🗑️
+                    </button>
+                </div>
                 <div class="event-datetime">${this.formatDateTime(event.datetime)}</div>
+                ${event.participants && event.participants.length > 0 ? 
+                    `<div class="event-participants">👥 ${event.participants.join(', ')}</div>` : ''}
+                ${event.location ? `<div class="event-location">📍 ${this.escapeHtml(event.location)}</div>` : ''}
+                <div class="event-meta">
+                    <span class="event-duration">${event.duration || 60} min</span>
+                    <span class="event-priority priority-${event.priority || 'medium'}">${event.priority || 'medium'}</span>
+                    <span class="event-id">ID: ${event.id.slice(-6)}</span>
+                </div>
             </div>
         `).join('');
 
         eventsContainer.innerHTML = eventsHTML;
+    }
+
+    updateEventCount(count) {
+        const subtitle = document.querySelector('.subtitle');
+        if (count > 0) {
+            subtitle.textContent = `Your AI calendar assistant (${count} events)`;
+        } else {
+            subtitle.textContent = 'Your AI calendar assistant';
+        }
     }
 
     formatDateTime(datetime) {
@@ -282,7 +395,7 @@ class AutoCalApp {
 
 // Initialize app when DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {
-    new AutoCalApp();
+    window.autoCalApp = new AutoCalApp();
 });
 
 // Handle system theme changes

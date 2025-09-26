@@ -15,12 +15,19 @@ name = "autocal-worker-prod"
 # [[ai]]
 # binding = "AI"
 
-# Add Durable Object binding for Phase 3
-# Uncomment when ready for Phase 3 (Durable Object Storage)
-# [[durable_objects.bindings]]
-# name = "CALENDAR_DO"
-# class_name = "CalendarDO"
-# script_name = "autocal-worker"
+# Durable Object binding for Phase 3
+[[durable_objects.bindings]]
+name = "CALENDAR_DO"
+class_name = "CalendarDO"
+
+# Define the Durable Object class
+[[durable_objects.objects]]
+class_name = "CalendarDO"
+
+# Durable Object migrations
+[[migrations]]
+tag = "v1"
+new_classes = ["CalendarDO"]
 
 # Add KV binding for potential future use
 # [[kv_namespaces]]
@@ -32,7 +39,7 @@ name = "autocal-worker-prod"
 [vars]
 ENVIRONMENT = "development"
 VERSION = "1.0.0"
-PHASE = "2"
+PHASE = "3"
 
 # Development configuration
 [dev]
