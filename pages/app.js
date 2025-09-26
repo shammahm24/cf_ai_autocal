@@ -173,7 +173,7 @@ class AutoCalApp {
                     body: JSON.stringify({
                         command: command,
                         timestamp: new Date().toISOString(),
-                        phase: 3,
+                        phase: 4,
                         sessionId: this.sessionId
                     }),
                     signal: controller.signal

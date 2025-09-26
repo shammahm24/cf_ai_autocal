@@ -10,10 +10,9 @@ name = "autocal-worker-dev"
 [env.production]
 name = "autocal-worker-prod"
 
-# Add AI binding for future phases
-# Uncomment when ready for Phase 4 (LLM Integration)
-# [[ai]]
-# binding = "AI"
+# AI binding for Phase 4 (LLM Integration)
+[ai]
+binding = "AI"
 
 # Durable Object binding for Phase 3
 [[durable_objects.bindings]]
@@ -39,7 +38,8 @@ new_classes = ["CalendarDO"]
 [vars]
 ENVIRONMENT = "development"
 VERSION = "1.0.0"
-PHASE = "3"
+PHASE = "4"
+LOCAL_DEV_MODE = "true"  # Disable AI for local development
 
 # Development configuration
 [dev]

@@ -54,3 +54,13 @@ phase2 is complete, what are the steps for phase 3. Do not code
 """
 phase2 is complete, what are the steps for phase 3. Do not code
 """
+
+## Prompt 7
+"""
+Debugging request timeouts. Identify areas of concern in codebase and configuration
+"""
+
+## Prompt 8
+"""
+
+"""

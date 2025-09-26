@@ -1,11 +1,186 @@
 /**
- * AutoCal Worker - Phase 3
- * Enhanced worker with Durable Object integration for persistent storage
+ * AutoCal Worker - Phase 4
+ * Enhanced worker with Workers AI (Llama 3.3) integration for advanced natural language processing
  */
 
 import { CalendarDO } from './calendar-do.js';
 
 export { CalendarDO };
+
+// AI Prompt Templates for Phase 4
+const PROMPTS = {
+  eventExtraction: {
+    model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    maxTokens: 512,
+    temperature: 0.1,
+    
+    buildPrompt: (userInput, currentDate = new Date()) => {
+      return `You are an expert calendar assistant. Extract structured event information from natural language.
+
+Current date/time: ${currentDate.toISOString()}
+User input: "${userInput}"
+
+Extract the following information and respond ONLY with valid JSON:
+{
+  "success": true/false,
+  "confidence": 0.0-1.0,
+  "event": {
+    "title": "brief descriptive title",
+    "description": "optional longer description",
+    "datetime": "ISO 8601 datetime string",
+    "duration": minutes as number,
+    "participants": ["name1", "name2"],
+    "location": "location or null",
+    "priority": "low/medium/high",
+    "type": "meeting/appointment/meal/event/call",
+    "urgency": "low/normal/high"
+  },
+  "ambiguities": ["list of unclear aspects"],
+  "suggestions": ["alternative interpretations"]
+}
+
+Rules:
+- For relative times like "tomorrow", "next Tuesday", calculate actual dates
+- Default duration: meetings=30min, meals=60min, appointments=30min
+- If time is ambiguous, suggest business hours (9am-5pm)
+- Extract all mentioned people as participants
+- Determine urgency from words like "urgent", "ASAP", "important"
+- If information is missing or unclear, note in ambiguities
+
+Examples:
+Input: "Book lunch with Sarah tomorrow at 1pm"
+Output: {"success":true,"confidence":0.95,"event":{"title":"Lunch with Sarah","datetime":"2024-09-26T13:00:00.000Z","duration":60,"participants":["Sarah"],"location":null,"priority":"medium","type":"meal","urgency":"normal"},"ambiguities":[],"suggestions":[]}
+
+Now extract from: "${userInput}"`
+    }
+  },
+
+  conversationClassification: {
+    model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    maxTokens: 256,
+    temperature: 0.1,
+
+    buildPrompt: (userInput) => {
+      return `Classify the user's intent for this calendar-related request.
+
+User input: "${userInput}"
+
+Respond ONLY with valid JSON:
+{
+  "intent": "create/query/modify/delete/conflict_check/general/help",
+  "confidence": 0.0-1.0,
+  "subtype": "specific action type",
+  "entities": {
+    "timeframe": "today/tomorrow/next week/specific date/null",
+    "people": ["mentioned names"],
+    "event_types": ["meeting/appointment/etc"],
+    "keywords": ["important words"]
+  },
+  "requires_clarification": true/false,
+  "suggested_response_type": "conversational/action/question"
+}
+
+Intent categories:
+- create: wants to schedule/book/add/plan new event (MUST include action words like book/schedule/add)
+- query: asking about schedule/events (what/when/show/list/my schedule - ALWAYS query, never create)
+- modify: change/update/move/reschedule existing event
+- delete: cancel/remove/clear events
+- conflict_check: check for overlaps/conflicts/availability
+- general: help/capabilities/general calendar discussion
+- help: unclear intent or needs assistance
+
+KEY RULE: If input contains "what", "show", "list", "my schedule", "tell me" → ALWAYS "query", never "create"
+
+Examples:
+"Book lunch tomorrow" → {"intent":"create","confidence":0.9}
+"What's my schedule today?" → {"intent":"query","confidence":0.95}
+"What my schedule next week" → {"intent":"query","confidence":0.95}
+"Show me my calendar" → {"intent":"query","confidence":0.95}
+"Do I have conflicts?" → {"intent":"conflict_check","confidence":0.9}
+"Help me" → {"intent":"help","confidence":0.8}
+
+Classify: "${userInput}"`
+    }
+  },
+
+  naturalLanguageQuery: {
+    model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    maxTokens: 512,
+    temperature: 0.2,
+
+    buildPrompt: (userQuery, events, currentDate) => {
+      return `You are a helpful calendar assistant. Answer the user's question about their schedule.
+
+Current date: ${currentDate.toISOString()}
+User question: "${userQuery}"
+User's events: ${JSON.stringify(events)}
+
+Respond ONLY with valid JSON:
+{
+  "answer": "natural language response",
+  "relevant_events": ["array of event IDs that match the query"],
+  "summary": {
+    "count": number,
+    "timeframe": "description of time period",
+    "highlights": ["key points about the schedule"]
+  },
+  "suggestions": ["helpful follow-up actions"],
+  "confidence": 0.0-1.0
+}
+
+Query types to handle:
+- Schedule overview: "What's my day like?"
+- Specific searches: "Meetings with John"
+- Time availability: "Am I free tomorrow afternoon?"
+- Event details: "When is my next appointment?"
+- Pattern analysis: "How busy am I this week?"
+
+Be conversational, helpful, and specific. Include relevant details like times, participants, and locations.
+
+Answer: "${userQuery}"`
+    }
+  },
+
+  contextualConversation: {
+    model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    maxTokens: 384,
+    temperature: 0.4,
+
+    buildPrompt: (currentMessage, conversationHistory, userEvents) => {
+      return `You are AutoCal, a friendly AI calendar assistant. Continue this conversation naturally.
+
+Current message: "${currentMessage}"
+User's events: ${JSON.stringify(userEvents)}
+
+Respond ONLY with valid JSON:
+{
+  "response": "natural, helpful response",
+  "action_needed": "none/create_event/modify_event/query_schedule/clarify",
+  "follow_up_questions": ["questions to better help the user"],
+  "suggestions": ["helpful next steps"],
+  "tone": "friendly/professional/casual"
+}
+
+Guidelines:
+- Be helpful and proactive in offering assistance
+- Ask clarifying questions when needed
+- Offer relevant suggestions based on their calendar
+- Use a warm, professional tone
+
+Continue the conversation for: "${currentMessage}"`
+    }
+  }
+};
+
+// Utility functions
+function validateAIResponse(response) {
+  try {
+    const parsed = JSON.parse(response);
+    return { valid: true, data: parsed };
+  } catch (error) {
+    return { valid: false, error: error.message };
+  }
+}
 
 export default {
   async fetch(request, env, ctx) {
@@ -30,16 +205,17 @@ export default {
       // Extract or generate session ID
       const sessionId = getSessionId(request);
       
-      // Basic API endpoint for Phase 1-2 compatibility
+      // Basic API endpoint for Phase 1-3 compatibility
       if (url.pathname === '/api' || url.pathname === '/api/') {
         return new Response(
           JSON.stringify({ 
             message: 'ok',
             status: 'success',
-            phase: 3,
+            phase: 4,
             timestamp: new Date().toISOString(),
             sessionId: sessionId,
-            note: 'Use /api/chat for commands, /api/events/* for event management'
+            ai_enabled: !!env.AI,
+            note: 'Phase 4: AI-powered natural language processing with Llama 3.3'
           }),
           {
             status: 200,
@@ -57,9 +233,10 @@ export default {
           JSON.stringify({ 
             status: 'healthy',
             version: '1.0.0',
-            phase: 3,
+            phase: 4,
             uptime: Date.now(),
-            features: ['cors', 'chat-api', 'durable-objects', 'event-storage', 'conflict-detection']
+            ai_service: env.AI ? 'available' : 'unavailable',
+            features: ['cors', 'chat-api', 'durable-objects', 'event-storage', 'conflict-detection', 'workers-ai', 'llama-3.3']
           }),
           {
             status: 200,
@@ -71,7 +248,7 @@ export default {
         );
       }
 
-      // Enhanced Chat endpoint with event creation
+      // Enhanced Chat endpoint with AI processing
       if (url.pathname === '/api/chat') {
         if (request.method === 'POST') {
           try {
@@ -95,14 +272,14 @@ export default {
               );
             }
 
-            // Process the command and potentially create an event
-            const response = await processCommandWithStorage(body.command, body, sessionId, env);
+            // Process the command with AI-powered understanding
+            const response = await processCommandWithAI(body.command, body, sessionId, env);
             
             return new Response(
               JSON.stringify({
                 ...response,
                 status: 'success',
-                phase: 3,
+                phase: 4,
                 timestamp: new Date().toISOString(),
                 sessionId: sessionId,
                 requestId: generateRequestId()
@@ -325,15 +502,16 @@ async function processCommandWithStorage(command, requestData, sessionId, env) {
  * Determine the type of conversation/request
  */
 function determineConversationType(command) {
-  // Event creation keywords
-  if (/\b(book|schedule|add|create|set up|plan|make)\b/.test(command) && 
-      (/\b(at|on|for|next|this|tomorrow|today)\b/.test(command) || /\d{1,2}:\d{2}|\d{1,2}\s*(am|pm)/.test(command))) {
-    return 'create';
+  // Query keywords have PRIORITY - check first
+  if (/\b(what|when|where|who|how|show|list|find|search|tell me|what's|my schedule|show me)\b/.test(command)) {
+    return 'query';
   }
   
-  // Query keywords
-  if (/\b(what|when|where|who|how|show|list|find|search|tell me|what's)\b/.test(command)) {
-    return 'query';
+  // Event creation keywords - but EXCLUDE query patterns
+  if (/\b(book|schedule|add|create|set up|plan|make)\b/.test(command) && 
+      (/\b(at|on|for|next|this|tomorrow|today)\b/.test(command) || /\d{1,2}:\d{2}|\d{1,2}\s*(am|pm)/.test(command)) &&
+      !/\b(what|when|where|who|how|show|list|find|search|tell me|what's|my schedule)\b/.test(command)) {
+    return 'create';
   }
   
   // Modification keywords
@@ -875,4 +1053,325 @@ function analyzeCommand(command) {
  */
 function generateRequestId() {
   return Math.random().toString(36).substr(2, 9);
+} 
+
+/**
+ * Process command with AI-powered understanding (Phase 4)
+ */
+async function processCommandWithAI(command, requestData, sessionId, env) {
+  // Check if we're in local development mode - fallback to Phase 3
+  if (env.LOCAL_DEV_MODE === "true") {
+    console.log('[LOCAL DEV] Bypassing AI, using Phase 3 processing');
+    return await processCommandWithStorage(command, requestData, sessionId, env);
+  }
+
+  const response = {
+    message: `🧠 AI Processing: "${command}"`,
+    originalCommand: command,
+    commandLength: command.length,
+    phase: 4,
+    ai_powered: true
+  };
+
+  try {
+    // Step 1: Use AI to classify conversation intent
+    const classificationResult = await classifyConversationWithAI(command, env);
+    response.classification = classificationResult;
+
+    // Get calendar DO for operations that need event data
+    const calendarDO = getCalendarDO(sessionId, env);
+
+    // Step 2: Route to appropriate AI-powered handler based on intent
+    switch (classificationResult.intent) {
+      case 'create':
+        return await handleAIEventCreation(command, calendarDO, response, env);
+      
+      case 'query':
+        return await handleAIQuery(command, calendarDO, response, env);
+      
+      case 'modify':
+        return await handleAIModification(command, calendarDO, response, env);
+      
+      case 'delete':
+        return await handleAIDeletion(command, calendarDO, response, env);
+      
+      case 'conflict_check':
+        return await handleAIConflictCheck(command, calendarDO, response, env);
+      
+      case 'general':
+      case 'help':
+        return await handleAIGeneralConversation(command, calendarDO, response, env);
+      
+      default:
+        // Fallback to Phase 3 processing if AI classification fails
+        console.warn('AI classification failed, falling back to Phase 3');
+        return await processCommandWithStorage(command, requestData, sessionId, env);
+    }
+
+  } catch (error) {
+    console.error('AI processing error:', error);
+    
+    // Graceful fallback to Phase 3 processing
+    response.ai_error = error.message;
+    response.fallback_used = 'phase_3_processing';
+    response.message = `🤖 AI processing failed, using basic parsing: ${error.message}`;
+    
+    return await processCommandWithStorage(command, requestData, sessionId, env);
+  }
+}
+
+/**
+ * Use AI to classify conversation intent
+ */
+async function classifyConversationWithAI(command, env) {
+  try {
+    const prompt = PROMPTS.conversationClassification.buildPrompt(command);
+    
+    const aiResponse = await env.AI.run(PROMPTS.conversationClassification.model, {
+      prompt: prompt,
+      max_tokens: PROMPTS.conversationClassification.maxTokens,
+      temperature: PROMPTS.conversationClassification.temperature
+    });
+
+    const validation = validateAIResponse(aiResponse.response);
+    if (!validation.valid) {
+      throw new Error(`Invalid AI response: ${validation.error}`);
+    }
+
+    return validation.data;
+  } catch (error) {
+    console.error('AI classification error:', error);
+    // Fallback to Phase 3 classification
+    return {
+      intent: determineConversationType(command.toLowerCase()),
+      confidence: 0.5,
+      fallback: 'phase_3_classification',
+      error: error.message
+    };
+  }
+}
+
+/**
+ * AI-powered event creation
+ */
+async function handleAIEventCreation(command, calendarDO, response, env) {
+  try {
+    // Use AI to extract event details
+    const extractionPrompt = PROMPTS.eventExtraction.buildPrompt(command);
+    
+    const aiResponse = await env.AI.run(PROMPTS.eventExtraction.model, {
+      prompt: extractionPrompt,
+      max_tokens: PROMPTS.eventExtraction.maxTokens,
+      temperature: PROMPTS.eventExtraction.temperature
+    });
+
+    const validation = validateAIResponse(aiResponse.response);
+    if (!validation.valid) {
+      throw new Error(`Invalid AI extraction response: ${validation.error}`);
+    }
+
+    const extractionResult = validation.data;
+    
+    if (!extractionResult.success || !extractionResult.event) {
+      response.message = `🤔 I understand you want to create an event, but I need more details. ${extractionResult.ambiguities ? extractionResult.ambiguities.join(', ') : ''}`;
+      response.suggestions = extractionResult.suggestions || [
+        "Try being more specific about time and date",
+        "Include who should attend the event"
+      ];
+      response.ai_extraction = extractionResult;
+      return response;
+    }
+
+    // Create event using AI-extracted data
+    const eventData = {
+      ...extractionResult.event,
+      aiExtracted: true,
+      aiConfidence: extractionResult.confidence,
+      extractedFrom: command
+    };
+
+    const doRequest = new Request('https://fake-host/add', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(eventData)
+    });
+    
+    const doResponse = await calendarDO.fetch(doRequest);
+    const result = await doResponse.json();
+    
+    if (result.success) {
+      response.message = `✅ Perfect! I've created "${extractionResult.event.title}" for ${formatDateTime(extractionResult.event.datetime)}`;
+      response.eventCreated = result.event;
+      response.conflicts = result.conflicts || [];
+      response.ai_extraction = extractionResult;
+      
+      if (result.conflicts && result.conflicts.length > 0) {
+        // Use AI for smarter conflict resolution
+        const conflictSuggestions = await generateAIConflictSuggestions(
+          extractionResult.event, 
+          result.conflicts, 
+          env
+        );
+        response.ai_conflict_suggestions = conflictSuggestions;
+        response.message += `\n⚠️ I detected ${result.conflicts.length} scheduling conflict${result.conflicts.length > 1 ? 's' : ''}. Would you like me to suggest alternatives?`;
+      }
+    } else if (result.hasConflicts) {
+      response.message = `🤔 I can create "${extractionResult.event.title}" but it conflicts with existing events. Should I suggest alternative times?`;
+      response.eventData = eventData;
+      response.conflicts = result.conflicts;
+      response.canForceAdd = true;
+    } else {
+      response.message = `❌ I couldn't create the event: ${result.error}`;
+      response.error = result.error;
+    }
+    
+    return response;
+
+  } catch (error) {
+    console.error('AI event creation error:', error);
+    // Fallback to Phase 3 event creation
+    return await handleEventCreation(command, analyzeCommand(command.toLowerCase()), calendarDO, response);
+  }
+}
+
+/**
+ * AI-powered natural language queries
+ */
+async function handleAIQuery(command, calendarDO, response, env) {
+  try {
+    // Get user's events first
+    const doRequest = new Request('https://fake-host/list', { method: 'GET' });
+    const doResponse = await calendarDO.fetch(doRequest);
+    const result = await doResponse.json();
+    
+    if (!result.success) {
+      response.message = "❌ I couldn't retrieve your events right now.";
+      return response;
+    }
+
+    const events = result.events || [];
+    
+    // Use AI to understand the query and generate response
+    const queryPrompt = PROMPTS.naturalLanguageQuery.buildPrompt(command, events, new Date());
+    
+    const aiResponse = await env.AI.run(PROMPTS.naturalLanguageQuery.model, {
+      prompt: queryPrompt,
+      max_tokens: PROMPTS.naturalLanguageQuery.maxTokens,
+      temperature: PROMPTS.naturalLanguageQuery.temperature
+    });
+
+    const validation = validateAIResponse(aiResponse.response);
+    if (!validation.valid) {
+      throw new Error(`Invalid AI query response: ${validation.error}`);
+    }
+
+    const queryResult = validation.data;
+    
+    response.message = queryResult.answer;
+    response.events = events;
+    response.relevant_events = queryResult.relevant_events;
+    response.ai_analysis = queryResult;
+    response.suggestions = queryResult.suggestions;
+
+    return response;
+
+  } catch (error) {
+    console.error('AI query error:', error);
+    // Fallback to Phase 3 query handling
+    return await handleEventQuery(command.toLowerCase(), calendarDO, response);
+  }
+}
+
+/**
+ * AI-powered general conversation
+ */
+async function handleAIGeneralConversation(command, calendarDO, response, env) {
+  try {
+    // Get user's events for context
+    const doRequest = new Request('https://fake-host/list', { method: 'GET' });
+    const doResponse = await calendarDO.fetch(doRequest);
+    const result = await doResponse.json();
+    const events = result.success ? result.events || [] : [];
+
+    // Use AI for contextual conversation
+    const conversationPrompt = PROMPTS.contextualConversation.buildPrompt(
+      command, 
+      [], // TODO: Implement conversation history
+      events
+    );
+    
+    const aiResponse = await env.AI.run(PROMPTS.contextualConversation.model, {
+      prompt: conversationPrompt,
+      max_tokens: PROMPTS.contextualConversation.maxTokens,
+      temperature: PROMPTS.contextualConversation.temperature
+    });
+
+    const validation = validateAIResponse(aiResponse.response);
+    if (!validation.valid) {
+      throw new Error(`Invalid AI conversation response: ${validation.error}`);
+    }
+
+    const conversationResult = validation.data;
+    
+    response.message = conversationResult.response;
+    response.events = events;
+    response.suggestions = conversationResult.suggestions;
+    response.follow_up_questions = conversationResult.follow_up_questions;
+    response.ai_conversation = conversationResult;
+
+    return response;
+
+  } catch (error) {
+    console.error('AI conversation error:', error);
+    // Fallback to Phase 3 general conversation
+    return await handleGeneralConversation(command.toLowerCase(), calendarDO, response);
+  }
+}
+
+/**
+ * Generate AI-powered conflict resolution suggestions
+ */
+async function generateAIConflictSuggestions(newEvent, conflicts, env) {
+  try {
+    const conflictPrompt = PROMPTS.conflictResolution.buildPrompt(
+      newEvent,
+      conflicts,
+      {} // TODO: Add user schedule context
+    );
+    
+    const aiResponse = await env.AI.run(PROMPTS.conflictResolution.model, {
+      prompt: conflictPrompt,
+      max_tokens: PROMPTS.conflictResolution.maxTokens,
+      temperature: PROMPTS.conflictResolution.temperature
+    });
+
+    const validation = validateAIResponse(aiResponse.response);
+    if (validation.valid) {
+      return validation.data;
+    }
+  } catch (error) {
+    console.error('AI conflict resolution error:', error);
+  }
+  
+  return null;
+}
+
+/**
+ * Placeholder handlers for AI modification and deletion (enhanced in future iterations)
+ */
+async function handleAIModification(command, calendarDO, response, env) {
+  response.message = `🔧 AI-powered event modification coming soon! For now, you can delete and recreate events.`;
+  response.note = "Phase 4 focuses on creation and querying. Modification will be enhanced in future updates.";
+  return response;
+}
+
+async function handleAIDeletion(command, calendarDO, response, env) {
+  response.message = `🗑️ AI-powered event deletion coming soon! For now, use the delete button (🗑️) next to events.`;
+  response.note = "Phase 4 focuses on creation and querying. Deletion will be enhanced in future updates.";
+  return response;
+}
+
+async function handleAIConflictCheck(command, calendarDO, response, env) {
+  // Use AI query for conflict checking for now
+  return await handleAIQuery(command, calendarDO, response, env);
 } 
