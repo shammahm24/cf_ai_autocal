@@ -432,7 +432,7 @@ export default {
             timestamp: new Date().toISOString(),
             sessionId: sessionId,
             ai_enabled: !!env.AI,
-            note: 'Phase 5: Workflow orchestration with coordinated AI processing pipeline'
+            note: 'Phase 6: Enhanced UX with calendar view, bottom chat, and advanced conflict resolution'
           }),
           {
             status: 200,
@@ -450,11 +450,11 @@ export default {
           JSON.stringify({ 
             status: 'healthy',
             version: '1.0.0',
-            phase: 5,
+            phase: 6,
             uptime: Date.now(),
             ai_service: env.AI ? 'available' : 'unavailable',
             workflow_service: env.WORKFLOW ? 'available' : 'unavailable',
-            features: ['cors', 'chat-api', 'durable-objects', 'event-storage', 'conflict-detection', 'workers-ai', 'llama-3.3', 'workflows', 'orchestration']
+            features: ['cors', 'chat-api', 'durable-objects', 'event-storage', 'conflict-detection', 'workers-ai', 'llama-3.3', 'workflows', 'orchestration', 'calendar-view', 'conflict-resolution', 'enhanced-ux']
           }),
           {
             status: 200,
@@ -497,7 +497,7 @@ export default {
               JSON.stringify({
                 ...response,
                 status: 'success',
-                phase: 5,
+                phase: 6,
                 timestamp: new Date().toISOString(),
                 sessionId: sessionId,
                 requestId: generateRequestId()
@@ -1317,8 +1317,9 @@ async function processCommandWithWorkflow(command, requestData, sessionId, env) 
         status: 'initiated',
         message: 'Workflow started in background for enhanced processing'
       },
-      phase: 5,
-      workflow_orchestrated: true
+      phase: 6,
+      workflow_orchestrated: true,
+      enhanced_ux: true
     };
 
   } catch (error) {

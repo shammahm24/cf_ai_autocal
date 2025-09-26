@@ -59,8 +59,8 @@ phase2 is complete, what are the steps for phase 3. Do not code
 """
 Debugging request timeouts. Identify areas of concern in codebase and configuration
 """
-
+// similar prompts for all phases
 ## Prompt 8
 """
-
+an addition i need for phase 6 is the chat to be at the bottom and everything else on top for better visibility
 """

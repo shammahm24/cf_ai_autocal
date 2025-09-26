@@ -1907,7 +1907,7 @@ var index_default = {
             timestamp: (/* @__PURE__ */ new Date()).toISOString(),
             sessionId,
             ai_enabled: !!env2.AI,
-            note: "Phase 5: Workflow orchestration with coordinated AI processing pipeline"
+            note: "Phase 6: Enhanced UX with calendar view, bottom chat, and advanced conflict resolution"
           }),
           {
             status: 200,
@@ -1923,11 +1923,11 @@ var index_default = {
           JSON.stringify({
             status: "healthy",
             version: "1.0.0",
-            phase: 5,
+            phase: 6,
             uptime: Date.now(),
             ai_service: env2.AI ? "available" : "unavailable",
             workflow_service: env2.WORKFLOW ? "available" : "unavailable",
-            features: ["cors", "chat-api", "durable-objects", "event-storage", "conflict-detection", "workers-ai", "llama-3.3", "workflows", "orchestration"]
+            features: ["cors", "chat-api", "durable-objects", "event-storage", "conflict-detection", "workers-ai", "llama-3.3", "workflows", "orchestration", "calendar-view", "conflict-resolution", "enhanced-ux"]
           }),
           {
             status: 200,
@@ -1964,7 +1964,7 @@ var index_default = {
               JSON.stringify({
                 ...response,
                 status: "success",
-                phase: 5,
+                phase: 6,
                 timestamp: (/* @__PURE__ */ new Date()).toISOString(),
                 sessionId,
                 requestId: generateRequestId()
@@ -2590,8 +2590,9 @@ async function processCommandWithWorkflow(command, requestData, sessionId, env2)
         status: "initiated",
         message: "Workflow started in background for enhanced processing"
       },
-      phase: 5,
-      workflow_orchestrated: true
+      phase: 6,
+      workflow_orchestrated: true,
+      enhanced_ux: true
     };
   } catch (error3) {
     console.error("[Worker] Workflow processing error:", error3);
@@ -2881,7 +2882,7 @@ var jsonError = /* @__PURE__ */ __name(async (request, env2, _ctx, middlewareCtx
 }, "jsonError");
 var middleware_miniflare3_json_error_default = jsonError;
 
-// .wrangler/tmp/bundle-ul5Npd/middleware-insertion-facade.js
+// .wrangler/tmp/bundle-T7lx75/middleware-insertion-facade.js
 var __INTERNAL_WRANGLER_MIDDLEWARE__ = [
   middleware_ensure_req_body_drained_default,
   middleware_miniflare3_json_error_default
@@ -2913,7 +2914,7 @@ function __facade_invoke__(request, env2, ctx, dispatch, finalMiddleware) {
 }
 __name(__facade_invoke__, "__facade_invoke__");
 
-// .wrangler/tmp/bundle-ul5Npd/middleware-loader.entry.ts
+// .wrangler/tmp/bundle-T7lx75/middleware-loader.entry.ts
 var __Facade_ScheduledController__ = class ___Facade_ScheduledController__ {
   constructor(scheduledTime, cron, noRetry) {
     this.scheduledTime = scheduledTime;

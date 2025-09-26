@@ -7,54 +7,127 @@
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>AutoCal</h1>
-            <p class="subtitle">Your AI calendar assistant</p>
-            <button class="theme-toggle" id="themeToggle" aria-label="Toggle theme">
-                <span class="theme-icon">🌙</span>
-            </button>
+    <div class="app-container">
+        <!-- Header Section -->
+        <header class="app-header">
+            <div class="header-content">
+                <div class="brand">
+                    <h1>AutoCal</h1>
+                    <p class="subtitle">Your AI calendar assistant</p>
+                </div>
+                <div class="header-controls">
+                    <button class="view-toggle" id="viewToggle" aria-label="Toggle view">
+                        <span class="view-icon">📅</span>
+                        <span class="view-text">Calendar</span>
+                    </button>
+                    <button class="theme-toggle" id="themeToggle" aria-label="Toggle theme">
+                        <span class="theme-icon">🌙</span>
+                    </button>
+                </div>
+            </div>
         </header>
 
-        <main>
-            <!-- Input Section -->
-            <section class="input-section">
-                <div class="input-container">
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <!-- Calendar and Events Display -->
+            <section class="calendar-section">
+                <div class="calendar-header">
+                    <h2>📅 Your Calendar</h2>
+                    <div class="calendar-controls">
+                        <button class="btn btn-secondary" id="todayBtn">Today</button>
+                        <button class="btn btn-secondary" id="weekBtn">Week</button>
+                        <button class="btn btn-secondary" id="monthBtn">Month</button>
+                    </div>
+                </div>
+                
+                <!-- Calendar Grid View (New in Phase 6) -->
+                <div id="calendarGrid" class="calendar-grid" style="display: none;">
+                    <div class="calendar-nav">
+                        <button class="nav-btn" id="prevBtn">‹</button>
+                        <h3 id="currentPeriod">Loading...</h3>
+                        <button class="nav-btn" id="nextBtn">›</button>
+                    </div>
+                    <div id="calendarView" class="calendar-view">
+                        <!-- Dynamic calendar grid will be inserted here -->
+                    </div>
+                </div>
+
+                <!-- Events List View -->
+                <div id="eventsList" class="events-list">
+                    <div class="no-events">No events yet. Use the chat below to create your first event!</div>
+                </div>
+            </section>
+
+            <!-- Conflict Resolution Display (New in Phase 6) -->
+            <section class="conflicts-section" id="conflictsSection" style="display: none;">
+                <div class="section-header">
+                    <h2>⚠️ Schedule Conflicts</h2>
+                    <button class="btn btn-secondary" id="dismissConflicts">Dismiss</button>
+                </div>
+                <div id="conflictsList" class="conflicts-list">
+                    <!-- Dynamic conflict resolution options will be inserted here -->
+                </div>
+            </section>
+
+            <!-- Status and Notifications Area -->
+            <section class="status-section">
+                <div id="statusDisplay" class="status-display">
+                    <div class="status-item">
+                        <span class="status-label">Phase:</span>
+                        <span class="status-value" id="phaseStatus">6</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">Events:</span>
+                        <span class="status-value" id="eventCount">0</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">AI:</span>
+                        <span class="status-value status-online" id="aiStatus">Online</span>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Fixed Bottom Chat Interface -->
+        <section class="chat-interface">
+            <!-- Chat History -->
+            <div class="chat-history" id="chatHistory">
+                <div class="chat-message assistant-message">
+                    <div class="message-content">
+                        Hi! I'm your AI calendar assistant. You can ask me about your schedule, create new events, check for conflicts, or have a conversation about your calendar. Try asking "What's my schedule today?" or "Book lunch with Sarah tomorrow at 1pm"
+                    </div>
+                    <div class="message-time">Just now</div>
+                </div>
+            </div>
+
+            <!-- Chat Input -->
+            <div class="chat-input-container">
+                <div class="input-wrapper">
                     <input 
                         type="text" 
                         id="commandInput" 
                         placeholder="Ask me anything about your calendar... 'What's my schedule today?' or 'Book lunch tomorrow at 1pm'"
-                        class="command-input"
+                        class="chat-input"
                         autocomplete="off"
                     >
-                    <button id="submitBtn" class="submit-btn">Send</button>
+                    <button id="submitBtn" class="send-btn" aria-label="Send message">
+                        <span class="send-icon">➤</span>
+                    </button>
                 </div>
                 <div class="loading" id="loading" style="display: none;">
                     <div class="spinner"></div>
                     <span>Processing...</span>
                 </div>
-            </section>
+            </div>
 
-            <!-- Assistant Response Section -->
-            <section class="assistant-section">
-                <h2>💬 Chat</h2>
-                <div id="assistantResponse" class="assistant-response">
-                    Hi! I'm your AI calendar assistant. You can ask me about your schedule, create new events, check for conflicts, or have a conversation about your calendar. Try asking "What's my schedule today?" or "Book lunch with Sarah tomorrow at 1pm"
-                </div>
-            </section>
+            <!-- Chat Toggle Button -->
+            <button class="chat-toggle" id="chatToggle" aria-label="Toggle chat">
+                <span class="chat-toggle-icon">💬</span>
+            </button>
+        </section>
 
-            <!-- Events Display Section -->
-            <section class="events-section">
-                <h2>📅 Your Calendar</h2>
-                <div id="eventsList" class="events-list">
-                    <div class="no-events">No events yet. Ask me to create your first event!</div>
-                </div>
-            </section>
-        </main>
-
-        <footer>
-            <p>Powered by Cloudflare Workers AI • Phase 4: AI-Powered Natural Language Processing</p>
-        </footer>
+        <!-- Assistant Response Overlay (for compatibility) -->
+        <div id="assistantResponse" style="display: none;"></div>
     </div>
 
     <script src="app.js"></script>
