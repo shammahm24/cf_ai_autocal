@@ -1,9 +1,9 @@
 /**
- * AI Prompt Templates for AutoCal - Phase 4
- * Structured prompts for Llama 3.3 on Workers AI
+ * AI Prompt Templates for AutoCal - Phase 5
+ * Structured prompts for Llama 3.3 on Workers AI - Workflow Edition
  */
 
-export const PROMPTS = {
+export const WORKFLOW_PROMPTS = {
   eventExtraction: {
     version: "1.0",
     model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",

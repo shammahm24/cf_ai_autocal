@@ -1,9 +1,226 @@
 /**
- * AutoCal Worker - Phase 4
- * Enhanced worker with Workers AI (Llama 3.3) integration for advanced natural language processing
+ * AutoCal Worker - Phase 5
+ * Enhanced worker with Cloudflare Workflows for coordinated event processing pipeline
  */
 
 import { CalendarDO } from './calendar-do.js';
+import { WorkflowEntrypoint } from 'cloudflare:workers';
+import { WORKFLOW_PROMPTS } from '../workflows/prompts.js';
+
+// Phase 5: Calendar Workflow Definition
+export class CalendarWorkflow extends WorkflowEntrypoint {
+  async run(event, step) {
+    const { userInput, sessionId, currentDate = new Date().toISOString() } = event.payload;
+    
+    console.log(`[Workflow] Starting calendar workflow for session: ${sessionId}`);
+    
+    try {
+      // Step 1: Input Validation
+      const validationResult = await step.do("validate-input", async () => {
+        return await this.validateInput(userInput);
+      });
+
+      if (!validationResult.valid) {
+        return {
+          success: false,
+          error: "Invalid input",
+          details: validationResult.errors,
+          step: "validation"
+        };
+      }
+
+      // Step 2: AI Parsing with retry logic
+      const parseResult = await step.do("ai-parsing", {
+        retries: {
+          limit: 3,
+          delay: "30 seconds",
+          backoff: "exponential"
+        }
+      }, async () => {
+        return await this.parseWithAI(userInput, currentDate);
+      });
+
+      if (!parseResult.success) {
+        return {
+          success: false,
+          error: "Failed to parse event details",
+          details: parseResult.error,
+          step: "ai-parsing"
+        };
+      }
+
+      // Step 3: Event Storage
+      const storageResult = await step.do("event-storage", {
+        retries: {
+          limit: 2,
+          delay: "10 seconds",
+          backoff: "linear"
+        }
+      }, async () => {
+        const finalEvent = parseResult.event;
+        return await this.storeEvent(finalEvent, sessionId);
+      });
+
+      if (!storageResult.success) {
+        return {
+          success: false,
+          error: "Failed to store event",
+          details: storageResult.error,
+          step: "storage"
+        };
+      }
+
+      // Step 4: Response Generation
+      const response = await step.do("response-generation", async () => {
+        return await this.generateResponse({
+          event: storageResult.event,
+          userInput
+        });
+      });
+
+      console.log(`[Workflow] Successfully completed for session: ${sessionId}`);
+      
+      return {
+        success: true,
+        result: response,
+        metadata: {
+          eventId: storageResult.event.id,
+          processingTime: Date.now() - new Date(currentDate).getTime()
+        }
+      };
+
+    } catch (error) {
+      console.error(`[Workflow] Fatal error for session ${sessionId}:`, error);
+      
+      return {
+        success: false,
+        error: "Workflow execution failed",
+        details: error.message,
+        step: "workflow-error"
+      };
+    }
+  }
+
+  async validateInput(userInput) {
+    if (!userInput || typeof userInput !== 'string') {
+      return {
+        valid: false,
+        errors: ['Input must be a non-empty string']
+      };
+    }
+
+    const trimmed = userInput.trim();
+    if (trimmed.length < 3) {
+      return {
+        valid: false,
+        errors: ['Input too short - please provide more details']
+      };
+    }
+
+    return {
+      valid: true,
+      sanitized: trimmed
+    };
+  }
+
+  async parseWithAI(userInput, currentDate) {
+    try {
+      const prompt = WORKFLOW_PROMPTS.eventExtraction.buildPrompt(userInput, new Date(currentDate));
+      
+      const response = await this.env.AI.run(
+        WORKFLOW_PROMPTS.eventExtraction.model,
+        {
+          messages: [{ role: "user", content: prompt }],
+          max_tokens: WORKFLOW_PROMPTS.eventExtraction.maxTokens,
+          temperature: WORKFLOW_PROMPTS.eventExtraction.temperature
+        }
+      );
+
+      let parsed;
+      try {
+        parsed = JSON.parse(response.response);
+      } catch (parseError) {
+        throw new Error(`AI response not valid JSON: ${response.response}`);
+      }
+
+      if (!parsed.success || !parsed.event) {
+        return {
+          success: false,
+          error: "AI could not extract event details",
+          ambiguities: parsed.ambiguities || [],
+          suggestions: parsed.suggestions || []
+        };
+      }
+
+      const event = parsed.event;
+      if (!event.title || !event.datetime) {
+        return {
+          success: false,
+          error: "Missing required event details (title or datetime)",
+          ambiguities: parsed.ambiguities || []
+        };
+      }
+
+      event.id = crypto.randomUUID();
+      event.createdAt = new Date().toISOString();
+      event.source = 'workflow-parsed';
+      event.originalInput = userInput;
+
+      return {
+        success: true,
+        event,
+        confidence: parsed.confidence || 0.8
+      };
+
+    } catch (error) {
+      console.error('[Workflow] AI parsing error:', error);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  async storeEvent(event, sessionId) {
+    try {
+      const doId = this.env.CALENDAR_DO.idFromName(sessionId);
+      const doStub = this.env.CALENDAR_DO.get(doId);
+      
+      const response = await doStub.fetch(new Request('https://do/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ event })
+      }));
+
+      const result = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(result.error || 'Storage failed');
+      }
+
+      return {
+        success: true,
+        event: result.event
+      };
+
+    } catch (error) {
+      console.error('[Workflow] Storage error:', error);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  async generateResponse({ event, userInput }) {
+    return {
+      message: `✅ Workflow successfully processed "${event.title}" for ${new Date(event.datetime).toLocaleDateString()}`,
+      event,
+      type: 'success',
+      workflow_processed: true
+    };
+  }
+}
 
 export { CalendarDO };
 
@@ -215,7 +432,7 @@ export default {
             timestamp: new Date().toISOString(),
             sessionId: sessionId,
             ai_enabled: !!env.AI,
-            note: 'Phase 4: AI-powered natural language processing with Llama 3.3'
+            note: 'Phase 5: Workflow orchestration with coordinated AI processing pipeline'
           }),
           {
             status: 200,
@@ -233,10 +450,11 @@ export default {
           JSON.stringify({ 
             status: 'healthy',
             version: '1.0.0',
-            phase: 4,
+            phase: 5,
             uptime: Date.now(),
             ai_service: env.AI ? 'available' : 'unavailable',
-            features: ['cors', 'chat-api', 'durable-objects', 'event-storage', 'conflict-detection', 'workers-ai', 'llama-3.3']
+            workflow_service: env.WORKFLOW ? 'available' : 'unavailable',
+            features: ['cors', 'chat-api', 'durable-objects', 'event-storage', 'conflict-detection', 'workers-ai', 'llama-3.3', 'workflows', 'orchestration']
           }),
           {
             status: 200,
@@ -272,14 +490,14 @@ export default {
               );
             }
 
-            // Process the command with AI-powered understanding
-            const response = await processCommandWithAI(body.command, body, sessionId, env);
+            // Process the command using Workflow orchestration (Phase 5)
+            const response = await processCommandWithWorkflow(body.command, body, sessionId, env);
             
             return new Response(
               JSON.stringify({
                 ...response,
                 status: 'success',
-                phase: 4,
+                phase: 5,
                 timestamp: new Date().toISOString(),
                 sessionId: sessionId,
                 requestId: generateRequestId()
@@ -1058,6 +1276,60 @@ function generateRequestId() {
 /**
  * Process command with AI-powered understanding (Phase 4)
  */
+/**
+ * Phase 5: Process command using Cloudflare Workflows
+ * Coordinates the complete event processing pipeline
+ */
+async function processCommandWithWorkflow(command, requestData, sessionId, env) {
+  try {
+    console.log(`[Worker] Starting workflow for session: ${sessionId}, command: "${command}"`);
+    
+    // Invoke the calendar workflow
+    const workflowEvent = {
+      userInput: command,
+      sessionId: sessionId,
+      currentDate: new Date().toISOString(),
+      metadata: {
+        source: 'web_ui',
+        version: '5.0.0',
+        requestData
+      }
+    };
+
+    // Create workflow instance and run
+    const workflow = await env.WORKFLOW.create({
+      id: `calendar-${sessionId}-${Date.now()}`,
+      params: workflowEvent
+    });
+
+    // For now, return workflow initiation status and run synchronously in Phase 4 mode
+    // In production, you'd typically return the workflow ID and check status asynchronously
+    console.log(`[Worker] Workflow initiated for session: ${sessionId}, ID: ${workflow.id}`);
+    
+    // Fallback to Phase 4 processing for immediate response
+    // This maintains user experience while workflow runs in background
+    const phase4Result = await processCommandWithAI(command, requestData, sessionId, env);
+    
+    return {
+      ...phase4Result,
+      workflow: {
+        id: workflow.id,
+        status: 'initiated',
+        message: 'Workflow started in background for enhanced processing'
+      },
+      phase: 5,
+      workflow_orchestrated: true
+    };
+
+  } catch (error) {
+    console.error('[Worker] Workflow processing error:', error);
+    
+    // Graceful fallback to Phase 4
+    console.log('[Worker] Falling back to Phase 4 processing due to workflow error');
+    return await processCommandWithAI(command, requestData, sessionId, env);
+  }
+}
+
 async function processCommandWithAI(command, requestData, sessionId, env) {
   // Check if we're in local development mode - fallback to Phase 3
   if (env.LOCAL_DEV_MODE === "true") {

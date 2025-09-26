@@ -1320,6 +1320,403 @@ var CalendarDO = class {
 };
 
 // index.js
+import { WorkflowEntrypoint } from "cloudflare:workers";
+
+// ../workflows/prompts.js
+var WORKFLOW_PROMPTS = {
+  eventExtraction: {
+    version: "1.0",
+    model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    maxTokens: 512,
+    temperature: 0.1,
+    buildPrompt: /* @__PURE__ */ __name((userInput, currentDate = /* @__PURE__ */ new Date()) => {
+      return `You are an expert calendar assistant. Extract structured event information from natural language.
+
+Current date/time: ${currentDate.toISOString()}
+User input: "${userInput}"
+
+Extract the following information and respond ONLY with valid JSON:
+{
+  "success": true/false,
+  "confidence": 0.0-1.0,
+  "event": {
+    "title": "brief descriptive title",
+    "description": "optional longer description",
+    "datetime": "ISO 8601 datetime string",
+    "duration": minutes as number,
+    "participants": ["name1", "name2"],
+    "location": "location or null",
+    "priority": "low/medium/high",
+    "type": "meeting/appointment/meal/event/call",
+    "urgency": "low/normal/high"
+  },
+  "ambiguities": ["list of unclear aspects"],
+  "suggestions": ["alternative interpretations"]
+}
+
+Rules:
+- For relative times like "tomorrow", "next Tuesday", calculate actual dates
+- Default duration: meetings=30min, meals=60min, appointments=30min
+- If time is ambiguous, suggest business hours (9am-5pm)
+- Extract all mentioned people as participants
+- Determine urgency from words like "urgent", "ASAP", "important"
+- If information is missing or unclear, note in ambiguities
+
+Examples:
+Input: "Book lunch with Sarah tomorrow at 1pm"
+Output: {"success":true,"confidence":0.95,"event":{"title":"Lunch with Sarah","datetime":"2024-09-26T13:00:00.000Z","duration":60,"participants":["Sarah"],"location":null,"priority":"medium","type":"meal","urgency":"normal"},"ambiguities":[],"suggestions":[]}
+
+Input: "Meeting next week"
+Output: {"success":false,"confidence":0.3,"event":null,"ambiguities":["No specific time","No participants","Vague date"],"suggestions":["Specify day and time","Add participants","Clarify meeting purpose"]}
+
+Now extract from: "${userInput}"`;
+    }, "buildPrompt")
+  },
+  conversationClassification: {
+    version: "1.0",
+    model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    maxTokens: 256,
+    temperature: 0.1,
+    buildPrompt: /* @__PURE__ */ __name((userInput) => {
+      return `Classify the user's intent for this calendar-related request.
+
+User input: "${userInput}"
+
+Respond ONLY with valid JSON:
+{
+  "intent": "create/query/modify/delete/conflict_check/general/help",
+  "confidence": 0.0-1.0,
+  "subtype": "specific action type",
+  "entities": {
+    "timeframe": "today/tomorrow/next week/specific date/null",
+    "people": ["mentioned names"],
+    "event_types": ["meeting/appointment/etc"],
+    "keywords": ["important words"]
+  },
+  "requires_clarification": true/false,
+  "suggested_response_type": "conversational/action/question"
+}
+
+Intent categories:
+- create: wants to schedule/book/add/plan new event (MUST include action words like book/schedule/add)
+- query: asking about schedule/events (what/when/show/list/my schedule - ALWAYS query, never create)
+- modify: change/update/move/reschedule existing event
+- delete: cancel/remove/clear events
+- conflict_check: check for overlaps/conflicts/availability
+- general: help/capabilities/general calendar discussion
+- help: unclear intent or needs assistance
+
+KEY RULE: If input contains "what", "show", "list", "my schedule", "tell me" \u2192 ALWAYS "query", never "create"
+
+Examples:
+"Book lunch tomorrow" \u2192 {"intent":"create","confidence":0.9}
+"What's my schedule today?" \u2192 {"intent":"query","confidence":0.95}
+"What my schedule next week" \u2192 {"intent":"query","confidence":0.95}
+"Show me my calendar" \u2192 {"intent":"query","confidence":0.95}
+"Do I have conflicts?" \u2192 {"intent":"conflict_check","confidence":0.9}
+"Help me" \u2192 {"intent":"help","confidence":0.8}
+
+Classify: "${userInput}"`;
+    }, "buildPrompt")
+  },
+  conflictResolution: {
+    version: "1.0",
+    model: "@cf/meta/llama-3.3-70b-instruct",
+    maxTokens: 384,
+    temperature: 0.3,
+    buildPrompt: /* @__PURE__ */ __name((newEvent, conflictingEvents, userSchedule) => {
+      return `You are a scheduling expert. Suggest solutions for this calendar conflict.
+
+New event: ${JSON.stringify(newEvent)}
+Conflicting with: ${JSON.stringify(conflictingEvents)}
+User's schedule context: ${JSON.stringify(userSchedule)}
+
+Respond ONLY with valid JSON:
+{
+  "analysis": "brief conflict description",
+  "severity": "minor/moderate/major",
+  "recommendations": [
+    {
+      "type": "reschedule_new/reschedule_existing/shorten_duration/change_location",
+      "description": "user-friendly explanation",
+      "new_datetime": "ISO datetime if applicable",
+      "reasoning": "why this is a good solution",
+      "impact": "what changes for user"
+    }
+  ],
+  "questions": ["clarifying questions for user"],
+  "alternatives": ["other options to consider"]
+}
+
+Consider:
+- Meeting importance and priorities
+- Travel time between locations
+- Participant availability patterns
+- Buffer time around meetings
+- User's typical schedule preferences
+
+Generate helpful, actionable suggestions that minimize disruption.`;
+    }, "buildPrompt")
+  },
+  naturalLanguageQuery: {
+    version: "1.0",
+    model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    maxTokens: 512,
+    temperature: 0.2,
+    buildPrompt: /* @__PURE__ */ __name((userQuery, events, currentDate) => {
+      return `You are a helpful calendar assistant. Answer the user's question about their schedule.
+
+Current date: ${currentDate.toISOString()}
+User question: "${userQuery}"
+User's events: ${JSON.stringify(events)}
+
+Respond ONLY with valid JSON:
+{
+  "answer": "natural language response",
+  "relevant_events": ["array of event IDs that match the query"],
+  "summary": {
+    "count": number,
+    "timeframe": "description of time period",
+    "highlights": ["key points about the schedule"]
+  },
+  "suggestions": ["helpful follow-up actions"],
+  "confidence": 0.0-1.0
+}
+
+Query types to handle:
+- Schedule overview: "What's my day like?"
+- Specific searches: "Meetings with John"
+- Time availability: "Am I free tomorrow afternoon?"
+- Event details: "When is my next appointment?"
+- Pattern analysis: "How busy am I this week?"
+
+Be conversational, helpful, and specific. Include relevant details like times, participants, and locations.
+
+Answer: "${userQuery}"`;
+    }, "buildPrompt")
+  },
+  contextualConversation: {
+    version: "1.0",
+    model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    maxTokens: 384,
+    temperature: 0.4,
+    buildPrompt: /* @__PURE__ */ __name((currentMessage, conversationHistory, userEvents) => {
+      return `You are AutoCal, a friendly AI calendar assistant. Continue this conversation naturally.
+
+Conversation history: ${JSON.stringify(conversationHistory)}
+Current message: "${currentMessage}"
+User's events: ${JSON.stringify(userEvents)}
+
+Respond ONLY with valid JSON:
+{
+  "response": "natural, helpful response",
+  "action_needed": "none/create_event/modify_event/query_schedule/clarify",
+  "follow_up_questions": ["questions to better help the user"],
+  "context_maintained": {
+    "previous_topic": "what we were discussing",
+    "user_preferences": "learned preferences",
+    "pending_actions": "incomplete tasks"
+  },
+  "suggestions": ["helpful next steps"],
+  "tone": "friendly/professional/casual"
+}
+
+Guidelines:
+- Maintain conversation context and remember previous exchanges
+- Be helpful and proactive in offering assistance
+- Ask clarifying questions when needed
+- Acknowledge previous interactions
+- Offer relevant suggestions based on their calendar
+- Use a warm, professional tone
+
+Continue the conversation for: "${currentMessage}"`;
+    }, "buildPrompt")
+  }
+};
+
+// index.js
+var CalendarWorkflow = class extends WorkflowEntrypoint {
+  static {
+    __name(this, "CalendarWorkflow");
+  }
+  async run(event, step) {
+    const { userInput, sessionId, currentDate = (/* @__PURE__ */ new Date()).toISOString() } = event.payload;
+    console.log(`[Workflow] Starting calendar workflow for session: ${sessionId}`);
+    try {
+      const validationResult = await step.do("validate-input", async () => {
+        return await this.validateInput(userInput);
+      });
+      if (!validationResult.valid) {
+        return {
+          success: false,
+          error: "Invalid input",
+          details: validationResult.errors,
+          step: "validation"
+        };
+      }
+      const parseResult = await step.do("ai-parsing", {
+        retries: {
+          limit: 3,
+          delay: "30 seconds",
+          backoff: "exponential"
+        }
+      }, async () => {
+        return await this.parseWithAI(userInput, currentDate);
+      });
+      if (!parseResult.success) {
+        return {
+          success: false,
+          error: "Failed to parse event details",
+          details: parseResult.error,
+          step: "ai-parsing"
+        };
+      }
+      const storageResult = await step.do("event-storage", {
+        retries: {
+          limit: 2,
+          delay: "10 seconds",
+          backoff: "linear"
+        }
+      }, async () => {
+        const finalEvent = parseResult.event;
+        return await this.storeEvent(finalEvent, sessionId);
+      });
+      if (!storageResult.success) {
+        return {
+          success: false,
+          error: "Failed to store event",
+          details: storageResult.error,
+          step: "storage"
+        };
+      }
+      const response = await step.do("response-generation", async () => {
+        return await this.generateResponse({
+          event: storageResult.event,
+          userInput
+        });
+      });
+      console.log(`[Workflow] Successfully completed for session: ${sessionId}`);
+      return {
+        success: true,
+        result: response,
+        metadata: {
+          eventId: storageResult.event.id,
+          processingTime: Date.now() - new Date(currentDate).getTime()
+        }
+      };
+    } catch (error3) {
+      console.error(`[Workflow] Fatal error for session ${sessionId}:`, error3);
+      return {
+        success: false,
+        error: "Workflow execution failed",
+        details: error3.message,
+        step: "workflow-error"
+      };
+    }
+  }
+  async validateInput(userInput) {
+    if (!userInput || typeof userInput !== "string") {
+      return {
+        valid: false,
+        errors: ["Input must be a non-empty string"]
+      };
+    }
+    const trimmed = userInput.trim();
+    if (trimmed.length < 3) {
+      return {
+        valid: false,
+        errors: ["Input too short - please provide more details"]
+      };
+    }
+    return {
+      valid: true,
+      sanitized: trimmed
+    };
+  }
+  async parseWithAI(userInput, currentDate) {
+    try {
+      const prompt = WORKFLOW_PROMPTS.eventExtraction.buildPrompt(userInput, new Date(currentDate));
+      const response = await this.env.AI.run(
+        WORKFLOW_PROMPTS.eventExtraction.model,
+        {
+          messages: [{ role: "user", content: prompt }],
+          max_tokens: WORKFLOW_PROMPTS.eventExtraction.maxTokens,
+          temperature: WORKFLOW_PROMPTS.eventExtraction.temperature
+        }
+      );
+      let parsed;
+      try {
+        parsed = JSON.parse(response.response);
+      } catch (parseError) {
+        throw new Error(`AI response not valid JSON: ${response.response}`);
+      }
+      if (!parsed.success || !parsed.event) {
+        return {
+          success: false,
+          error: "AI could not extract event details",
+          ambiguities: parsed.ambiguities || [],
+          suggestions: parsed.suggestions || []
+        };
+      }
+      const event = parsed.event;
+      if (!event.title || !event.datetime) {
+        return {
+          success: false,
+          error: "Missing required event details (title or datetime)",
+          ambiguities: parsed.ambiguities || []
+        };
+      }
+      event.id = crypto.randomUUID();
+      event.createdAt = (/* @__PURE__ */ new Date()).toISOString();
+      event.source = "workflow-parsed";
+      event.originalInput = userInput;
+      return {
+        success: true,
+        event,
+        confidence: parsed.confidence || 0.8
+      };
+    } catch (error3) {
+      console.error("[Workflow] AI parsing error:", error3);
+      return {
+        success: false,
+        error: error3.message
+      };
+    }
+  }
+  async storeEvent(event, sessionId) {
+    try {
+      const doId = this.env.CALENDAR_DO.idFromName(sessionId);
+      const doStub = this.env.CALENDAR_DO.get(doId);
+      const response = await doStub.fetch(new Request("https://do/add", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ event })
+      }));
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || "Storage failed");
+      }
+      return {
+        success: true,
+        event: result.event
+      };
+    } catch (error3) {
+      console.error("[Workflow] Storage error:", error3);
+      return {
+        success: false,
+        error: error3.message
+      };
+    }
+  }
+  async generateResponse({ event, userInput }) {
+    return {
+      message: `\u2705 Workflow successfully processed "${event.title}" for ${new Date(event.datetime).toLocaleDateString()}`,
+      event,
+      type: "success",
+      workflow_processed: true
+    };
+  }
+};
 var PROMPTS = {
   eventExtraction: {
     model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
@@ -1510,7 +1907,7 @@ var index_default = {
             timestamp: (/* @__PURE__ */ new Date()).toISOString(),
             sessionId,
             ai_enabled: !!env2.AI,
-            note: "Phase 4: AI-powered natural language processing with Llama 3.3"
+            note: "Phase 5: Workflow orchestration with coordinated AI processing pipeline"
           }),
           {
             status: 200,
@@ -1526,10 +1923,11 @@ var index_default = {
           JSON.stringify({
             status: "healthy",
             version: "1.0.0",
-            phase: 4,
+            phase: 5,
             uptime: Date.now(),
             ai_service: env2.AI ? "available" : "unavailable",
-            features: ["cors", "chat-api", "durable-objects", "event-storage", "conflict-detection", "workers-ai", "llama-3.3"]
+            workflow_service: env2.WORKFLOW ? "available" : "unavailable",
+            features: ["cors", "chat-api", "durable-objects", "event-storage", "conflict-detection", "workers-ai", "llama-3.3", "workflows", "orchestration"]
           }),
           {
             status: 200,
@@ -1561,12 +1959,12 @@ var index_default = {
                 }
               );
             }
-            const response = await processCommandWithAI(body.command, body, sessionId, env2);
+            const response = await processCommandWithWorkflow(body.command, body, sessionId, env2);
             return new Response(
               JSON.stringify({
                 ...response,
                 status: "success",
-                phase: 4,
+                phase: 5,
                 timestamp: (/* @__PURE__ */ new Date()).toISOString(),
                 sessionId,
                 requestId: generateRequestId()
@@ -2166,6 +2564,42 @@ function generateRequestId() {
   return Math.random().toString(36).substr(2, 9);
 }
 __name(generateRequestId, "generateRequestId");
+async function processCommandWithWorkflow(command, requestData, sessionId, env2) {
+  try {
+    console.log(`[Worker] Starting workflow for session: ${sessionId}, command: "${command}"`);
+    const workflowEvent = {
+      userInput: command,
+      sessionId,
+      currentDate: (/* @__PURE__ */ new Date()).toISOString(),
+      metadata: {
+        source: "web_ui",
+        version: "5.0.0",
+        requestData
+      }
+    };
+    const workflow = await env2.WORKFLOW.create({
+      id: `calendar-${sessionId}-${Date.now()}`,
+      params: workflowEvent
+    });
+    console.log(`[Worker] Workflow initiated for session: ${sessionId}, ID: ${workflow.id}`);
+    const phase4Result = await processCommandWithAI(command, requestData, sessionId, env2);
+    return {
+      ...phase4Result,
+      workflow: {
+        id: workflow.id,
+        status: "initiated",
+        message: "Workflow started in background for enhanced processing"
+      },
+      phase: 5,
+      workflow_orchestrated: true
+    };
+  } catch (error3) {
+    console.error("[Worker] Workflow processing error:", error3);
+    console.log("[Worker] Falling back to Phase 4 processing due to workflow error");
+    return await processCommandWithAI(command, requestData, sessionId, env2);
+  }
+}
+__name(processCommandWithWorkflow, "processCommandWithWorkflow");
 async function processCommandWithAI(command, requestData, sessionId, env2) {
   if (env2.LOCAL_DEV_MODE === "true") {
     console.log("[LOCAL DEV] Bypassing AI, using Phase 3 processing");
@@ -2447,7 +2881,7 @@ var jsonError = /* @__PURE__ */ __name(async (request, env2, _ctx, middlewareCtx
 }, "jsonError");
 var middleware_miniflare3_json_error_default = jsonError;
 
-// .wrangler/tmp/bundle-pYnrS4/middleware-insertion-facade.js
+// .wrangler/tmp/bundle-ul5Npd/middleware-insertion-facade.js
 var __INTERNAL_WRANGLER_MIDDLEWARE__ = [
   middleware_ensure_req_body_drained_default,
   middleware_miniflare3_json_error_default
@@ -2479,7 +2913,7 @@ function __facade_invoke__(request, env2, ctx, dispatch, finalMiddleware) {
 }
 __name(__facade_invoke__, "__facade_invoke__");
 
-// .wrangler/tmp/bundle-pYnrS4/middleware-loader.entry.ts
+// .wrangler/tmp/bundle-ul5Npd/middleware-loader.entry.ts
 var __Facade_ScheduledController__ = class ___Facade_ScheduledController__ {
   constructor(scheduledTime, cron, noRetry) {
     this.scheduledTime = scheduledTime;
@@ -2577,6 +3011,7 @@ if (typeof middleware_insertion_facade_default === "object") {
 var middleware_loader_entry_default = WRAPPED_ENTRY;
 export {
   CalendarDO,
+  CalendarWorkflow,
   __INTERNAL_WRANGLER_MIDDLEWARE__,
   middleware_loader_entry_default as default
 };
